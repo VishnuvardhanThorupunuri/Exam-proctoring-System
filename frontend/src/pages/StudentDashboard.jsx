@@ -21,7 +21,7 @@ export default function StudentDashboard({ token, user, onLogout }) {
 
   const fetchExams = async () => {
     try {
-      const res = await fetch('http://localhost:5000/api/exams', {
+      const res = await fetch('https://exam-proctoring-system-vrbm.onrender.com/api/exams', {
         headers: { 'Authorization': `Bearer ${token}` },
       });
       if (!res.ok) throw new Error('Failed to load exams');
@@ -61,7 +61,7 @@ export default function StudentDashboard({ token, user, onLogout }) {
     if (!selectedExam) return;
 
     try {
-      const res = await fetch('http://localhost:5000/api/attempts', {
+      const res = await fetch('https://exam-proctoring-system-vrbm.onrender.com/api/attempts', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

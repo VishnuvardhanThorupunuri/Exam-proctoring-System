@@ -87,13 +87,13 @@ export default function ExamSession({ token, user }) {
 
   const fetchExamData = async () => {
     try {
-      const res = await fetch(`http://localhost:5000/api/attempts/${attemptId}`, {
+      const res = await fetch(`https://exam-proctoring-system-vrbm.onrender.com/api/attempts/${attemptId}`, {
         headers: { Authorization: `Bearer ${token}` },
       });
       if (!res.ok) throw new Error('Attempt not found or unauthorized');
       const attempt = await res.json();
 
-      const examRes = await fetch(`http://localhost:5000/api/exams/${attempt.examId}`, {
+      const examRes = await fetch(`https://exam-proctoring-system-vrbm.onrender.com/api/exams/${attempt.examId}`, {
         headers: { Authorization: `Bearer ${token}` },
       });
       if (!examRes.ok) throw new Error('Failed to load exam data');
@@ -131,7 +131,7 @@ export default function ExamSession({ token, user }) {
   };
 
   const initSocket = (examId) => {
-    socketRef.current = io('http://localhost:5000', { auth: { token } });
+    socketRef.current = io('https://exam-proctoring-system-vrbm.onrender.com', { auth: { token } });
     socketRef.current.on('connect', () => {
       socketRef.current.emit('student_join_exam', { examId, attemptId });
     });
@@ -229,7 +229,7 @@ export default function ExamSession({ token, user }) {
 
   const handleTerminate = async (reason = 'Auto-terminated by system') => {
     try {
-      await fetch(`http://localhost:5000/api/attempts/${attemptId}/terminate`, {
+      await fetch(`https://exam-proctoring-system-vrbm.onrender.com/api/attempts/${attemptId}/terminate`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
         body: JSON.stringify({ status: 'TERMINATED', proctorNotes: reason }),
@@ -244,7 +244,7 @@ export default function ExamSession({ token, user }) {
     setTimeUpOverlay(true);                 // show non-blocking overlay
     setSubmitting(true);
     try {
-      const res = await fetch(`http://localhost:5000/api/attempts/${attemptId}`, {
+      const res = await fetch(`https://exam-proctoring-system-vrbm.onrender.com/api/attempts/${attemptId}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
         // Use answersRef.current — always has the very latest answers regardless of closure age
@@ -267,7 +267,7 @@ export default function ExamSession({ token, user }) {
     autoSubmittedRef.current = true;
     setSubmitting(true);
     try {
-      const res = await fetch(`http://localhost:5000/api/attempts/${attemptId}`, {
+      const res = await fetch(`https://exam-proctoring-system-vrbm.onrender.com/api/attempts/${attemptId}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
         body: JSON.stringify({ answers: answersRef.current, status: 'COMPLETED' }),

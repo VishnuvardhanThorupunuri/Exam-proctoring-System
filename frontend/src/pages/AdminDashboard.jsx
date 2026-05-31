@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import './AdminDashboard.css';
 
-const API = 'http://localhost:5000';
+const API = 'https://exam-proctoring-system-vrbm.onrender.com';
 
 function StatCard({ icon, label, value, gradient, delay }) {
   return (

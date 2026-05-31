@@ -37,7 +37,7 @@ export default function ProctorDashboard({ token, user, onLogout }) {
   useEffect(() => {
     const fetchExams = async () => {
       try {
-        const res = await fetch('http://localhost:5000/api/exams', {
+        const res = await fetch('https://exam-proctoring-system-vrbm.onrender.com/api/exams', {
           headers: { Authorization: `Bearer ${token}` },
         });
         if (!res.ok) throw new Error('Failed to fetch exams');
@@ -56,7 +56,7 @@ export default function ProctorDashboard({ token, user, onLogout }) {
   // Helper to fetch attempts for a given exam – defined at component level so all handlers can call it
   const fetchAttemptsForExam = async (examId) => {
     try {
-      const res = await fetch(`http://localhost:5000/api/exams/${examId}/attempts`, {
+      const res = await fetch(`https://exam-proctoring-system-vrbm.onrender.com/api/exams/${examId}/attempts`, {
         headers: { Authorization: `Bearer ${token}` },
       });
       if (!res.ok) throw new Error('Failed to fetch attempts');
@@ -76,7 +76,7 @@ export default function ProctorDashboard({ token, user, onLogout }) {
     };
     fetchAttempts();
 
-    const socket = io('http://localhost:5000', { auth: { token } });
+    const socket = io('https://exam-proctoring-system-vrbm.onrender.com', { auth: { token } });
     socket.on('connect', () => console.log('Connected to proctor socket'));
     socket.emit('proctor_join_exam', { examId: selectedExam.id });
     
@@ -106,7 +106,7 @@ export default function ProctorDashboard({ token, user, onLogout }) {
   const handleTerminate = async (attemptId) => {
     setIsTerminating(true);
     try {
-      const res = await fetch(`http://localhost:5000/api/attempts/${attemptId}/terminate`, {
+      const res = await fetch(`https://exam-proctoring-system-vrbm.onrender.com/api/attempts/${attemptId}/terminate`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -136,7 +136,7 @@ export default function ProctorDashboard({ token, user, onLogout }) {
     const defaultReason = 'Terminated via quick action';
     const notes = terminationNotes.trim().length >= 5 ? terminationNotes : defaultReason;
     try {
-      const res = await fetch(`http://localhost:5000/api/attempts/${attemptId}/terminate`, {
+      const res = await fetch(`https://exam-proctoring-system-vrbm.onrender.com/api/attempts/${attemptId}/terminate`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -160,7 +160,7 @@ export default function ProctorDashboard({ token, user, onLogout }) {
 
   const handleCancelTermination = async (attemptId) => {
     try {
-      const res = await fetch(`http://localhost:5000/api/attempts/${attemptId}/cancel-termination`, {
+      const res = await fetch(`https://exam-proctoring-system-vrbm.onrender.com/api/attempts/${attemptId}/cancel-termination`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import './CreateExam.css';
 
-const API = 'http://localhost:5000';
+const API = 'https://exam-proctoring-system-vrbm.onrender.com';
 
 export default function CreateExam({ token }) {
   const navigate = useNavigate();
