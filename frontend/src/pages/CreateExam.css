@@ -1,0 +1,140 @@
+@import '../styles/theme.css';
+
+.create-exam-root {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.create-main {
+  flex: 1;
+  padding: 2.5rem 2rem;
+  max-width: 900px;
+  width: 100%;
+  margin: 0 auto;
+}
+
+.create-header-text { margin-bottom: 2rem; }
+
+.create-form {
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+}
+
+.create-section {
+  padding: 2rem;
+}
+
+.section-heading {
+  font-size: 1.15rem;
+  font-weight: 700;
+  margin-bottom: 1.5rem;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+.section-icon { opacity: 0.8; }
+.section-header-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 1.5rem;
+}
+
+.form-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1.5rem;
+  margin-bottom: 1rem;
+}
+.mb-3 { margin-bottom: 1rem; }
+.mb-4 { margin-bottom: 1.5rem; }
+
+.empty-questions {
+  text-align: center;
+  padding: 3rem 1rem;
+  color: var(--text-muted);
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-md);
+}
+
+.questions-list {
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+}
+
+.question-card {
+  position: relative;
+  background: rgba(15, 23, 42, 0.4);
+}
+.question-remove {
+  position: absolute;
+  top: 1.25rem; right: 1.25rem;
+  background: rgba(239, 68, 68, 0.1);
+  border: 1px solid rgba(239, 68, 68, 0.3);
+  border-radius: var(--radius-sm);
+  color: var(--danger);
+  cursor: pointer;
+  padding: 0.4rem 0.6rem;
+  font-size: 0.9rem;
+  transition: var(--transition-fast);
+}
+.question-remove:hover { background: rgba(239, 68, 68, 0.2); transform: scale(1.05); }
+
+.question-number {
+  font-size: 0.95rem;
+  font-weight: 700;
+  color: var(--text-secondary);
+  margin-bottom: 1.25rem;
+  padding-bottom: 0.75rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.options-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+.option-row {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+.option-letter {
+  color: var(--primary);
+  font-weight: 700;
+  min-width: 24px;
+}
+
+.create-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 1rem;
+  margin-top: 1rem;
+  padding-bottom: 4rem;
+}
+
+@media (max-width: 600px) {
+  .form-grid { grid-template-columns: 1fr; gap: 1rem; }
+  .create-actions { flex-direction: column; }
+  .create-actions .btn { width: 100%; justify-content: center; }
+  .create-main { padding: 1.5rem 1rem; }
+  .create-section { padding: 1.5rem 1rem; }
+}
+
+/* Success alert — used after exam is saved */
+.alert-success {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.9rem 1.25rem;
+  background: rgba(34, 197, 94, 0.1);
+  border: 1px solid rgba(34, 197, 94, 0.35);
+  border-radius: var(--radius-sm);
+  color: #22c55e;
+  font-weight: 600;
+  font-size: 0.95rem;
+}
+
