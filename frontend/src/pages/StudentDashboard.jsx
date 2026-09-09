@@ -1,5 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { io } from 'socket.io-client';
+import { API_BASE_URL } from '../config';
 import './StudentDashboard.css';
 
 export default function StudentDashboard({ token, user, onLogout }) {
@@ -17,11 +19,21 @@ export default function StudentDashboard({ token, user, onLogout }) {
 
   useEffect(() => {
     fetchExams();
-  }, [token]);
+
+    const socket = io(API_BASE_URL, { auth: { token } });
+    socket.on('connect', () => {
+      if (user?.id) socket.join?.(`student_${user.id}`);
+    });
+    const handleReattempt = () => fetchExams();
+    socket.on('proctoring:reattempt_allowed', handleReattempt);
+    socket.on('reattempt_enabled', handleReattempt);
+
+    return () => socket.disconnect();
+  }, [token, user]);
 
   const fetchExams = async () => {
     try {
-      const res = await fetch('https://exam-proctoring-system-vrbm.onrender.com/api/exams', {
+      const res = await fetch(`${API_BASE_URL}/api/exams`, {
         headers: { 'Authorization': `Bearer ${token}` },
       });
       if (!res.ok) throw new Error('Failed to load exams');
@@ -60,14 +72,25 @@ export default function StudentDashboard({ token, user, onLogout }) {
   const handleLaunchExam = async () => {
     if (!selectedExam) return;
 
+    const deviceInfo = {
+      userAgent: navigator.userAgent,
+      platform: navigator.platform,
+      screenResolution: `${window.screen.width}x${window.screen.height}`,
+      language: navigator.language,
+      online: navigator.onLine,
+    };
+
     try {
-      const res = await fetch('https://exam-proctoring-system-vrbm.onrender.com/api/attempts', {
+      const res = await fetch(`${API_BASE_URL}/api/attempts`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${token}`,
         },
-        body: JSON.stringify({ examId: selectedExam.id }),
+        body: JSON.stringify({
+          examId: selectedExam.id,
+          deviceInfo,
+        }),
       });
 
       if (!res.ok) {
@@ -138,29 +161,65 @@ export default function StudentDashboard({ token, user, onLogout }) {
             </div>
           ) : (
             <div className="exams-grid">
-              {exams.map((exam, i) => (
-                <div key={exam.id} className={`exam-card glass-card fade-in-up delay-${(i%4)+1}`}>
-                  <div className="exam-card-header">
-                    <h3 className="exam-card-title">{exam.title}</h3>
-                    <span className="badge badge-primary">{exam.durationMinutes} min</span>
-                  </div>
-                  <div className="exam-card-body">
-                    <p className="exam-desc">{exam.description || 'No instructions provided.'}</p>
-                    <div className="exam-meta">
-                      <span className="meta-item">❓ {exam.questions?.length || 0} Questions</span>
-                      <span className="meta-item">⚠️ {exam.maxWarningsAllowed ?? 3} Warnings Cap</span>
+              {exams.map((exam, i) => {
+                const userAtt = exam.userAttempt;
+                const isSubmitted = userAtt && (userAtt.status === 'SUBMITTED' || userAtt.status === 'TERMINATED');
+                const canReattempt = isSubmitted && userAtt.allowReattempt;
+
+                return (
+                  <div key={exam.id} className={`exam-card glass-card fade-in-up delay-${(i%4)+1}`}>
+                    <div className="exam-card-header">
+                      <h3 className="exam-card-title">{exam.title}</h3>
+                      <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+                        <span className="badge badge-primary">{exam.durationMinutes} min</span>
+                        {canReattempt && (
+                          <span className="badge badge-success" style={{ fontSize: '0.7rem' }}>
+                            🔄 Reattempt Enabled
+                          </span>
+                        )}
+                        {isSubmitted && !canReattempt && (
+                          <span className="badge badge-secondary" style={{ fontSize: '0.7rem' }}>
+                            ✅ Already Submitted
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                    <div className="exam-card-body">
+                      <p className="exam-desc">{exam.description || 'No instructions provided.'}</p>
+                      <div className="exam-meta">
+                        <span className="meta-item">❓ {exam.questions?.length || 0} Questions</span>
+                        <span className="meta-item">⚠️ {exam.maxWarningsAllowed ?? 3} Warnings Cap</span>
+                        {userAtt && (
+                          <span className="meta-item" style={{ color: 'var(--text-muted)' }}>
+                            Previous Score: {userAtt.integrityScore}%
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                    <div className="exam-card-footer">
+                      {isSubmitted && !canReattempt ? (
+                        <button className="btn btn-secondary w-100" disabled style={{ opacity: 0.7, cursor: 'not-allowed' }}>
+                          Already Submitted
+                        </button>
+                      ) : canReattempt ? (
+                        <button
+                          className="btn btn-warning w-100"
+                          onClick={() => { setSelectedExam(exam); requestHardwarePermissions(); }}
+                        >
+                          🔄 Write Exam Again
+                        </button>
+                      ) : (
+                        <button
+                          className="btn btn-primary w-100"
+                          onClick={() => { setSelectedExam(exam); requestHardwarePermissions(); }}
+                        >
+                          🚀 Launch Exam
+                        </button>
+                      )}
                     </div>
                   </div>
-                  <div className="exam-card-footer">
-                    <button
-                      className="btn btn-primary"
-                      onClick={() => { setSelectedExam(exam); requestHardwarePermissions(); }}
-                    >
-                      🚀 Launch Exam
-                    </button>
-                  </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           )}
         </div>

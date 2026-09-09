@@ -16,14 +16,19 @@ const register = async (req, res) => {
       return res.status(400).json({ error: 'Missing required registration details' });
     }
 
-    const existingUser = await User.findOne({ email });
+    const normalizedEmail = email.trim().toLowerCase();
+    if (!normalizedEmail.endsWith('@gmail.com')) {
+      return res.status(400).json({ error: 'Only @gmail.com email addresses are allowed for registration (e.g., user@gmail.com)' });
+    }
+
+    const existingUser = await User.findOne({ email: normalizedEmail });
     if (existingUser) {
       return res.status(400).json({ error: 'User with this email already exists' });
     }
 
     const passwordHash = await bcrypt.hash(password, 10);
     const user = await User.create({
-      email,
+      email: normalizedEmail,
       passwordHash,
       firstName,
       lastName,
@@ -54,9 +59,18 @@ const login = async (req, res) => {
       return res.status(400).json({ error: 'Email and password are required' });
     }
 
-    const user = await User.findOne({ email });
+    const normalizedEmail = email.trim().toLowerCase();
+    if (!normalizedEmail.endsWith('@gmail.com')) {
+      return res.status(400).json({ error: 'Only @gmail.com email addresses are allowed (e.g., user@gmail.com)' });
+    }
+
+    const user = await User.findOne({ email: normalizedEmail });
     if (!user) {
       return res.status(400).json({ error: 'Invalid email or password' });
+    }
+
+    if (user.isDeleted) {
+      return res.status(403).json({ error: 'Account deactivated. Please contact an administrator or proctor to restore your access.' });
     }
 
     const isMatch = await bcrypt.compare(password, user.passwordHash);
@@ -160,10 +174,65 @@ const getUsersWithAttempts = async (req, res) => {
   }
 };
 
+// Users: Delete / Deactivate user (Supports soft-delete by default & hard-delete if requested)
+const deleteUser = async (req, res) => {
+  try {
+    if (req.user?.role !== 'ADMIN' && req.user?.role !== 'PROCTOR') {
+      return res.status(403).json({ error: 'Only admins or proctors can delete users' });
+    }
+    const { id } = req.params;
+    if (id === req.user?.id) {
+      return res.status(400).json({ error: 'You cannot delete your own active session account' });
+    }
+
+    const user = await User.findById(id);
+    if (!user) return res.status(404).json({ error: 'User not found' });
+
+    if (req.query.permanent === 'true' || req.body?.permanent === true) {
+      await User.findByIdAndDelete(id);
+      await ExamAttempt.deleteMany({ studentId: id });
+      await ProctorViolation.deleteMany({ studentId: id });
+      return res.json({ message: 'User permanently deleted from system', userId: id });
+    }
+
+    user.isDeleted = true;
+    user.deletedAt = new Date();
+    user.deletedBy = req.user.id;
+    await user.save();
+
+    res.json({ message: 'User account deactivated successfully', userId: user._id, isDeleted: true });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+};
+
+// Users: Restore soft-deleted / deactivated user
+const restoreUser = async (req, res) => {
+  try {
+    if (req.user?.role !== 'ADMIN' && req.user?.role !== 'PROCTOR') {
+      return res.status(403).json({ error: 'Only admins or proctors can restore users' });
+    }
+    const { id } = req.params;
+    const user = await User.findById(id);
+    if (!user) return res.status(404).json({ error: 'User not found' });
+
+    user.isDeleted = false;
+    user.deletedAt = null;
+    user.deletedBy = null;
+    await user.save();
+
+    res.json({ message: 'User account restored successfully', userId: user._id, isDeleted: false });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+};
+
 module.exports = {
   register,
   login,
   getProfile,
   getRoles,
   getUsersWithAttempts,
+  deleteUser,
+  restoreUser,
 };

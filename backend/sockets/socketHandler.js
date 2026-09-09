@@ -1,91 +1,87 @@
+const jwt = require('jsonwebtoken');
 const User = require('../models/User');
 const ExamAttempt = require('../models/ExamAttempt');
 const ProctorViolation = require('../models/ProctorViolation');
+const violationService = require('../services/violationService');
 
+const JWT_SECRET = process.env.JWT_SECRET || 'exam-proctoring-super-secret-key-12345!';
+
+// ─── Main socket handler ──────────────────────────────────────────────────────
 const socketHandler = (io) => {
   io.on('connection', (socket) => {
-    console.log(`Socket client connected: ${socket.id}`);
+    // ── Authenticate the connecting socket via JWT ──────────────────────────
+    const token = socket.handshake.auth?.token;
+    let socketUser = null;
 
-    // When a student joins an exam sandbox session
+    if (token) {
+      try {
+        socketUser = jwt.verify(token, JWT_SECRET);
+        console.log(`[SOCKET] Authenticated connection: user=${socketUser.id} role=${socketUser.role} socket=${socket.id}`);
+      } catch (err) {
+        console.warn(`[SOCKET] Invalid JWT on connect (socket=${socket.id}): ${err.message}`);
+        // We don't force-disconnect here — unauthenticated sockets simply cannot emit violations
+      }
+    } else {
+      console.log(`[SOCKET] Anonymous connection: socket=${socket.id}`);
+    }
+
+    // ── Student joins exam room ─────────────────────────────────────────────
     socket.on('student_join_exam', ({ attemptId, examId, studentName }) => {
+      if (!attemptId || !examId) {
+        console.warn(`[SOCKET] student_join_exam ignored — missing attemptId or examId (socket=${socket.id})`);
+        return;
+      }
       socket.join(`exam_${examId}`);
       socket.join(`attempt_${attemptId}`);
-      console.log(`Student [${studentName}] joined exam room exam_${examId} and attempt_${attemptId}`);
+      const name = studentName || socketUser?.email || 'Unknown Candidate';
+      console.log(`[SOCKET] Student "${name}" joined exam_${examId} / attempt_${attemptId}`);
     });
 
-    // When a proctor monitors a specific exam session
+    // ── Proctor joins exam monitor room ─────────────────────────────────────
     socket.on('proctor_join_exam', ({ examId }) => {
-      socket.join(`exam_${examId}`);
-      console.log(`Proctor joined monitor room for exam_${examId}`);
+      socket.join('proctor_global');
+      if (examId) {
+        socket.join(`exam_${examId}`);
+      }
+      const role = socketUser?.role || 'unknown';
+      console.log(`[SOCKET] ${role} joined proctor monitor room (examId=${examId || 'global'})`);
     });
 
-    // Telemetry anomaly event sent by client Edge AI proctoring
-    socket.on('client_telemetry_violation', async ({ attemptId, examId, violationType, severity, metadata }) => {
+    // ── Centralized proctoring violation event handler ─────────────────────
+    socket.on('proctoring:violation', async (rawPayload) => {
       try {
-        console.log(`[VIOLATION]: Attempt: ${attemptId} | Type: ${violationType} | Severity: ${severity}`);
-        
-        // Calculate integrity score penalty
-        let penalty = 0;
-        if (severity === 'LOW') penalty = 2;
-        else if (severity === 'MEDIUM') penalty = 10;
-        else if (severity === 'HIGH') penalty = 25;
+        const result = await violationService.processViolation({
+          socketUser,
+          rawPayload,
+          io,
+        });
 
-        // Fetch current attempt
-        const attempt = await ExamAttempt.findById(attemptId);
-        if (attempt) {
-          const newScore = Math.max(0, attempt.integrityScore - penalty);
-          
-          // Update attempt integrity score
-          attempt.integrityScore = newScore;
-          await attempt.save();
-
-          // Fetch student details for real-time alert
-          const student = await User.findById(attempt.studentId);
-          const studentName = student ? `${student.firstName} ${student.lastName}` : 'Unknown Student';
-
-          // Insert violation record in DB
-          const violation = await ProctorViolation.create({
-            attemptId,
-            violationType,
-            severity,
-            metadata: metadata || null,
-          });
-
-          // Broadcast alert in real-time to Proctors watching the exam
-          io.to(`exam_${examId}`).emit('student_violation_alert', {
-            attemptId,
-            violationId: violation._id,
-            studentName,
-            violationType,
-            severity,
-            timestamp: violation.timestamp,
-            currentScore: newScore,
-            metadata: metadata || null,
-          });
-
-          // Auto-terminate attempt if score hits 20 or below
-          if (newScore <= 20) {
-            attempt.status = 'TERMINATED';
-            attempt.submittedAt = new Date();
-            await attempt.save();
-
-            io.to(`attempt_${attemptId}`).emit('exam_force_terminated', {
-              reason: 'Integrity score fell below threshold. Exam auto-terminated.',
-            });
-            
-            io.to(`exam_${examId}`).emit('student_terminated_alert', {
-              attemptId,
-              studentName,
-            });
-          }
+        if (!result.success && result.reason) {
+          socket.emit('proctoring:error', { message: result.reason });
         }
       } catch (err) {
-        console.error('Error handling telemetry violation:', err);
+        console.error(`[SOCKET] Error delegating violation event:`, err);
+        socket.emit('proctoring:error', { message: 'Internal server error processing violation' });
       }
     });
 
-    socket.on('disconnect', () => {
-      console.log(`Socket client disconnected: ${socket.id}`);
+    // ── Live candidate status update (hardware, network, socket state) ──────
+    socket.on('student_status_update', (payload) => {
+      if (!payload || !payload.examId) return;
+      io.to(`exam_${payload.examId}`).emit('proctoring:student_status_changed', {
+        attemptId: payload.attemptId,
+        studentId: socketUser?.id || payload.studentId,
+        cameraStatus: payload.cameraStatus,
+        micStatus: payload.micStatus,
+        networkStatus: payload.networkStatus,
+        socketStatus: payload.socketStatus,
+        timestamp: new Date().toISOString(),
+      });
+    });
+
+    // ── Disconnect ──────────────────────────────────────────────────────────
+    socket.on('disconnect', (reason) => {
+      console.log(`[SOCKET] Disconnected: socket=${socket.id} user=${socketUser?.id || 'anon'} reason=${reason}`);
     });
   });
 };

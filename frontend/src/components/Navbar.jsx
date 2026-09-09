@@ -16,9 +16,9 @@ export default function Navbar({ user, onLogout }) {
       <div style={{ display: 'flex', gap: '1rem', alignItems: 'center' }}>
         {user && user.role !== 'STUDENT' && (
           <>
-            <Link to="/dashboard" style={{ color: '#fff', textDecoration: 'none' }}>Dashboard</Link>
+            <Link to="/" style={{ color: '#fff', textDecoration: 'none' }}>Dashboard</Link>
             {user.role === 'ADMIN' && (
-              <Link to="/create-exam" style={{ color: '#fff', textDecoration: 'none' }}>Create Exam</Link>
+              <Link to="/admin/create-exam" style={{ color: '#fff', textDecoration: 'none' }}>Create Exam</Link>
             )}
           </>
         )}

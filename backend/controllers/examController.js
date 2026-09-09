@@ -7,12 +7,45 @@ const getAllExams = async (req, res) => {
   try {
     const exams = await Exam.find({ isActive: true }).sort({ startTime: 1 }).populate('creatorId', 'firstName lastName');
     
+    // Pre-fetch student attempts if candidate
+    let studentAttemptsMap = {};
+    if (req.user?.role === 'STUDENT' && req.user?.id) {
+      const attempts = await ExamAttempt.find({ studentId: req.user.id })
+        .sort({ createdAt: -1 })
+        .lean();
+      for (const att of attempts) {
+        if (!studentAttemptsMap[att.examId]) {
+          studentAttemptsMap[att.examId] = att;
+        }
+      }
+    }
+
     const formattedExams = exams.map(exam => {
       const obj = exam.toObject();
       obj.id = obj._id;
       if (obj.creatorId) {
         obj.creator = obj.creatorId;
         delete obj.creatorId;
+      }
+      // If student, remove correct answers for integrity and attach latest userAttempt
+      if (req.user?.role === 'STUDENT') {
+        if (Array.isArray(obj.questions)) {
+          obj.questions = obj.questions.map((q) => {
+            if (!q) return q;
+            const { correctAnswer, ...studentQuestion } = q;
+            return studentQuestion;
+          });
+        }
+        const userAtt = studentAttemptsMap[obj.id];
+        if (userAtt) {
+          obj.userAttempt = {
+            id: userAtt._id,
+            status: userAtt.status,
+            allowReattempt: !!userAtt.allowReattempt,
+            integrityScore: userAtt.integrityScore,
+            submittedAt: userAtt.submittedAt,
+          };
+        }
       }
       return obj;
     });
@@ -161,10 +194,32 @@ const updateExam = async (req, res) => {
   }
 };
 
+// Exams: Delete an exam and clean up associated attempts & violations (Admin or Proctor only)
+const deleteExam = async (req, res) => {
+  try {
+    if (req.user?.role === 'STUDENT') {
+      return res.status(403).json({ error: 'Only admins or proctors can delete exams' });
+    }
+
+    const { id } = req.params;
+    const exam = await Exam.findById(id);
+    if (!exam) return res.status(404).json({ error: 'Exam not found' });
+
+    await Exam.findByIdAndDelete(id);
+    await ExamAttempt.deleteMany({ examId: id });
+    await ProctorViolation.deleteMany({ examId: id });
+
+    res.json({ message: 'Exam deleted successfully', examId: id });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+};
+
 module.exports = {
   getAllExams,
   createExam,
   getExamById,
   getExamAttempts,
   updateExam,
+  deleteExam,
 };

@@ -9,6 +9,8 @@ import AdminDashboard from './pages/AdminDashboard';
 import Navbar from './components/Navbar';
 import ExamSession from './pages/ExamSession';
 
+import { API_BASE_URL } from './config';
+
 function App() {
   const [user, setUser] = useState(null);
   const [token, setToken] = useState(localStorage.getItem('token'));
@@ -21,7 +23,7 @@ function App() {
         return;
       }
       try {
-        const response = await fetch('https://exam-proctoring-system-vrbm.onrender.com/api/auth/profile', {
+        const response = await fetch(`${API_BASE_URL}/api/auth/profile`, {
           headers: { Authorization: `Bearer ${token}` },
         });
         if (response.ok) {

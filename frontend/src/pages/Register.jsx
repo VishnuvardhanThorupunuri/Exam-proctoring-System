@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
+import { API_BASE_URL } from '../config';
 import './Login.css'; // We'll reuse the login styles for the auth container
 
 export default function Register() {
@@ -21,13 +22,19 @@ export default function Register() {
   const handleRegisterSubmit = async (e) => {
     e.preventDefault();
     setError(null);
-    setSubmitting(true);
     
+    const normalizedEmail = (formData.email || '').trim().toLowerCase();
+    if (!normalizedEmail.endsWith('@gmail.com')) {
+      setError('Only @gmail.com email addresses are allowed for registration (e.g., user@gmail.com)');
+      return;
+    }
+
+    setSubmitting(true);
     try {
-      const res = await fetch('https://exam-proctoring-system-vrbm.onrender.com/api/auth/register', {
+      const res = await fetch(`${API_BASE_URL}/api/auth/register`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(formData),
+        body: JSON.stringify({ ...formData, email: normalizedEmail }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Registration failed');
@@ -87,7 +94,7 @@ export default function Register() {
           </div>
 
           <div className="form-group">
-            <label className="form-label">Email Address</label>
+            <label className="form-label">Email Address (@gmail.com)</label>
             <div className="input-icon-wrap">
               <span className="input-icon">✉️</span>
               <input
@@ -95,7 +102,7 @@ export default function Register() {
                 name="email"
                 value={formData.email}
                 onChange={handleChange}
-                placeholder="you@aegis.com"
+                placeholder="you@gmail.com"
                 required
                 className="form-input"
               />

@@ -1,8 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
+import { API_BASE_URL as API } from '../config';
 import './CreateExam.css';
-
-const API = 'https://exam-proctoring-system-vrbm.onrender.com';
 
 export default function CreateExam({ token }) {
   const navigate = useNavigate();

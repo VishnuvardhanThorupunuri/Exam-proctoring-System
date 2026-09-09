@@ -16,7 +16,7 @@ async function seedDatabase() {
 
     // Create testing profiles
     const student = await User.create({
-      email: 'student@aegis.com',
+      email: 'student@gmail.com',
       passwordHash,
       firstName: 'Alex',
       lastName: 'Mercer',
@@ -24,7 +24,7 @@ async function seedDatabase() {
     });
 
     const proctor = await User.create({
-      email: 'proctor@aegis.com',
+      email: 'proctor@gmail.com',
       passwordHash,
       firstName: 'Sarah',
       lastName: 'Connor',
@@ -32,7 +32,7 @@ async function seedDatabase() {
     });
 
     const admin = await User.create({
-      email: 'admin@aegis.com',
+      email: 'admin@gmail.com',
       passwordHash,
       firstName: 'Bruce',
       lastName: 'Wayne',

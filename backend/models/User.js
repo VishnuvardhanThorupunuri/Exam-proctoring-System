@@ -7,6 +7,9 @@ const UserSchema = new Schema({
   firstName: { type: String, required: true },
   lastName: { type: String, required: true },
   role: { type: String, default: 'STUDENT', enum: ['STUDENT', 'PROCTOR', 'ADMIN'] },
+  isDeleted: { type: Boolean, default: false },
+  deletedAt: { type: Date, default: null },
+  deletedBy: { type: String, default: null },
 }, { 
   timestamps: true,
   toJSON: { virtuals: true },

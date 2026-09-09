@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
+import { API_BASE_URL } from '../config';
 import './Login.css';
 
 export default function Login({ onLogin }) {
@@ -13,12 +14,19 @@ export default function Login({ onLogin }) {
   const handleLoginSubmit = async (e) => {
     e.preventDefault();
     setError(null);
+
+    const normalizedEmail = email.trim().toLowerCase();
+    if (!normalizedEmail.endsWith('@gmail.com')) {
+      setError('Only @gmail.com email addresses are allowed (e.g., user@gmail.com)');
+      return;
+    }
+
     setSubmitting(true);
     try {
-      const res = await fetch('https://exam-proctoring-system-vrbm.onrender.com/api/auth/login', {
+      const res = await fetch(`${API_BASE_URL}/api/auth/login`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email, password }),
+        body: JSON.stringify({ email: normalizedEmail, password }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Login failed');
@@ -32,9 +40,9 @@ export default function Login({ onLogin }) {
   };
 
   const fillCredentials = (role) => {
-    if (role === 'STUDENT')  { setEmail('student@aegis.com');  setPassword('password123'); }
-    if (role === 'PROCTOR')  { setEmail('proctor@aegis.com');  setPassword('password123'); }
-    if (role === 'ADMIN')    { setEmail('admin@aegis.com');    setPassword('password123'); }
+    if (role === 'STUDENT')  { setEmail('student@gmail.com');  setPassword('password123'); }
+    if (role === 'PROCTOR')  { setEmail('proctor@gmail.com');  setPassword('password123'); }
+    if (role === 'ADMIN')    { setEmail('admin@gmail.com');    setPassword('password123'); }
   };
 
   return (
@@ -62,14 +70,14 @@ export default function Login({ onLogin }) {
         {/* Form */}
         <form onSubmit={handleLoginSubmit} className="login-form">
           <div className="form-group">
-            <label className="form-label">Email Address</label>
+            <label className="form-label">Email Address (@gmail.com)</label>
             <div className="input-icon-wrap">
               <span className="input-icon">✉️</span>
               <input
                 type="email"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
-                placeholder="you@aegis.com"
+                placeholder="student@gmail.com"
                 required
                 className="form-input"
                 id="login-email"

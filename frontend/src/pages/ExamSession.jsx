@@ -3,14 +3,14 @@ import { useParams, useNavigate } from 'react-router-dom';
 import { io } from 'socket.io-client';
 import * as faceapi from '@vladmandic/face-api';
 import * as cocoSsd from '@tensorflow-models/coco-ssd';
-// NOTE: Do NOT import '@tensorflow/tfjs' separately — coco-ssd already includes it.
-// Importing it twice causes hundreds of "kernel already registered" warnings.
+import { API_BASE_URL } from '../config';
 import './ExamSession.css';
 
 export default function ExamSession({ token, user }) {
   const { id: attemptId } = useParams();
   const navigate = useNavigate();
 
+  // Exam and attempt state
   const [exam, setExam] = useState(null);
   const [currentQuestionIdx, setCurrentQuestionIdx] = useState(0);
   const [answers, setAnswers] = useState({});
@@ -18,55 +18,276 @@ export default function ExamSession({ token, user }) {
   const [submitting, setSubmitting] = useState(false);
   const [timeLeft, setTimeLeft] = useState(null);
   const [error, setError] = useState(null);
-  const [timeUpOverlay, setTimeUpOverlay] = useState(false); // non-blocking time-up banner
-  const [timeUpCount, setTimeUpCount] = useState(5);         // 5-second countdown on overlay
-  const timerStartedRef = useRef(false);   // guards against autoSubmit firing on initial render
-  const autoSubmittedRef = useRef(false);  // prevents double-submission
-  const answersRef = useRef({});           // always holds the latest answers (avoids stale closure)
+
+  // Overlay and navigation guards
+  const [timeUpOverlay, setTimeUpOverlay] = useState(false);
+  const [timeUpCount, setTimeUpCount] = useState(5);
+  const timerStartedRef = useRef(false);
+  const autoSubmittedRef = useRef(false);
+  const answersRef = useRef({});
+  const exitingRef = useRef(false);
   const [cameraError, setCameraError] = useState(null);
 
+  // Responsive Live Telemetry UI State
+  const [networkStatus, setNetworkStatus] = useState(navigator.onLine ? 'online' : 'offline');
+  const [cameraStatus, setCameraStatus] = useState('active');
+  const [micStatus, setMicStatus] = useState('active');
+  const [socketStatus, setSocketStatus] = useState('connecting');
+  const [isFullscreen, setIsFullscreen] = useState(!!document.fullscreenElement);
+  const [activeWarning, setActiveWarning] = useState(null);
+
+  // Continuous Responsiveness Monitoring State
+  const [faceStatusText, setFaceStatusText] = useState('Checking...');
+  const [faceCountText, setFaceCountText] = useState(0);
+  const [monitoringStatusText, setMonitoringStatusText] = useState('Active');
+
+  // Media & AI References
   const videoRef = useRef(null);
-  const streamRef = useRef(null); // Store stream separately so it survives loading state
+  const streamRef = useRef(null);
   const socketRef = useRef(null);
   const objectDetectorRef = useRef(null);
-
+  const aiIntervalRef = useRef(null);
+  const isProcessingRef = useRef(false);
   const [modelsLoaded, setModelsLoaded] = useState(false);
+
+  // Sustained Detection Buffers & Cooldown Tracker
+  const noFaceFrameCountRef = useRef(0);
+  const multiFaceFrameCountRef = useRef(0);
+  const phoneFrameCountRef = useRef(0);
+  const bookFrameCountRef = useRef(0);
+  const tabletFrameCountRef = useRef(0);
+  const cooldownsRef = useRef({});
+
+  // Browser State Guards
+  const isTabHiddenRef = useRef(false);
+  const tabSwitchCountRef = useRef(0);
+  const isFullscreenExitRef = useRef(false);
+
   const WARNINGS_LIMIT = exam?.maxWarningsAllowed || 3;
   const [warningsCount, setWarningsCount] = useState(0);
 
-  // ─── 1. Start camera immediately (before loading is done) ───────────────────
-  // We request camera permissions ASAP and store the stream in a ref.
-  // Once the video element renders (after loading=false), we attach it.
+  // ─── 1. Helper: Display Temporary Student Warning Banner ───────────────────
+  const showStudentWarning = (message, type = 'warning', duration = 4000) => {
+    setActiveWarning({ message, type });
+    setTimeout(() => {
+      setActiveWarning(prev => (prev?.message === message ? null : prev));
+    }, duration);
+  };
+
+  // ─── 2. Helper: Client-Side Cooldown Check ─────────────────────────────────
+  const isClientCoolingDown = (type, durationMs = 8000) => {
+    const now = Date.now();
+    const last = cooldownsRef.current[type] || 0;
+    if (now - last < durationMs) return true;
+    cooldownsRef.current[type] = now;
+    return false;
+  };
+
+  // ─── Helper: Canvas Snapshot Capture for Violation Evidence ──────────
+  const captureWebcamSnapshot = () => {
+    try {
+      const video = videoRef.current;
+      if (!video || video.readyState < 2 || !video.videoWidth || !video.videoHeight) return null;
+      const canvas = document.createElement('canvas');
+      canvas.width = Math.min(video.videoWidth, 640);
+      canvas.height = Math.min(video.videoHeight, 480);
+      const ctx = canvas.getContext('2d');
+      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+      return canvas.toDataURL('image/jpeg', 0.6); // Compressed JPEG base64 Data URL
+    } catch (err) {
+      console.warn('Snapshot capture error:', err);
+      return null;
+    }
+  };
+
+  // ─── 3. Helper: Report Standard Violation to Server ────────────────────────
+  const reportViolation = (type, severity = 'LOW', confidence = 1.0, metadata = {}) => {
+    if (!attemptId || !exam) return;
+    
+    // Check client-side cooldown to avoid duplicate event flooding
+    if (isClientCoolingDown(type, 6000)) return;
+
+    // Capture compressed webcam frame evidence for confirmed violation
+    const snapshotData = captureWebcamSnapshot();
+
+    const payload = {
+      attemptId,
+      examId: exam._id || exam.id,
+      studentId: user?.id || user?._id,
+      type,
+      severity,
+      confidence,
+      timestamp: new Date().toISOString(),
+      metadata,
+      snapshotData,
+    };
+
+    // Emit live event over WebSocket
+    if (socketRef.current && socketRef.current.connected) {
+      socketRef.current.emit('proctoring:violation', payload);
+    }
+
+    // Always call HTTP REST fallback endpoint to guarantee MongoDB persistence
+    fetch(`${API_BASE_URL}/api/attempts/${attemptId}/violations`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify(payload),
+    }).catch(err => console.warn('HTTP violation sync fallback error:', err));
+
+    // Trigger candidate UI warnings
+    if (type === 'NO_FACE') showStudentWarning('⚠️ Face not detected — Please face your camera', 'danger');
+    else if (type === 'MULTIPLE_FACES') showStudentWarning(`🚨 Multiple faces detected (${metadata.numberOfFaces || 2})`, 'danger');
+    else if (type === 'PHONE_DETECTED') showStudentWarning('🚨 Mobile phone detected — Prohibited item!', 'danger');
+    else if (type === 'BOOK_DETECTED') showStudentWarning('⚠️ Book/Notes detected in view', 'warning');
+    else if (type === 'TABLET_DETECTED') showStudentWarning('⚠️ Tablet detected in view', 'danger');
+    else if (type === 'TAB_SWITCH') showStudentWarning('⚠️ Tab switch detected! Stay on the exam page', 'danger');
+    else if (type === 'FULLSCREEN_EXIT') showStudentWarning('⚠️ Fullscreen mode exited — Please re-enable fullscreen', 'warning');
+    else if (type === 'CAMERA_DISCONNECTED') showStudentWarning('📷 Camera disconnected or obstructed!', 'danger');
+    else if (type === 'MICROPHONE_DISCONNECTED') showStudentWarning('🎙️ Microphone disconnected!', 'warning');
+    else if (type === 'NETWORK_DISCONNECTED') showStudentWarning('📡 Network connection lost — reconnecting...', 'danger');
+
+    if (severity === 'HIGH' || severity === 'MEDIUM' || severity === 'CRITICAL') {
+      setWarningsCount(prev => prev + 1);
+    }
+  };
+
+  // ─── 4. Helper: Send Candidate Telemetry Status Update ──────────────────────
+  const sendStatusUpdate = (overrideState = {}) => {
+    if (!socketRef.current || !socketRef.current.connected || !exam) return;
+    socketRef.current.emit('student_status_update', {
+      attemptId,
+      examId: exam._id || exam.id,
+      studentId: user?.id || user?._id,
+      cameraStatus: overrideState.cameraStatus || cameraStatus,
+      micStatus: overrideState.micStatus || micStatus,
+      networkStatus: overrideState.networkStatus || networkStatus,
+      socketStatus: overrideState.socketStatus || socketStatus,
+    });
+  };
+
+  // ─── 5. Start Media Stream (Camera & Microphone Diagnostics) ────────────────
   useEffect(() => {
     let cancelled = false;
-    const getCamera = async () => {
+
+    const startMedia = async () => {
       try {
         const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
         if (cancelled) {
           stream.getTracks().forEach(t => t.stop());
           return;
         }
+
+        // Camera track monitoring
+        const videoTracks = stream.getVideoTracks();
+        if (videoTracks.length > 0) {
+          videoTracks[0].onended = () => {
+            setCameraStatus('disconnected');
+            reportViolation('CAMERA_DISCONNECTED', 'HIGH', 1.0);
+            sendStatusUpdate({ cameraStatus: 'disconnected' });
+          };
+          videoTracks[0].onmute = () => {
+            setCameraStatus('disconnected');
+            reportViolation('CAMERA_DISCONNECTED', 'HIGH', 1.0);
+          };
+          videoTracks[0].onunmute = () => {
+            setCameraStatus('active');
+            sendStatusUpdate({ cameraStatus: 'active' });
+          };
+        }
+
+        // Audio track monitoring
+        const audioTracks = stream.getAudioTracks();
+        if (audioTracks.length > 0) {
+          audioTracks[0].onended = () => {
+            setMicStatus('disconnected');
+            reportViolation('MICROPHONE_DISCONNECTED', 'MEDIUM', 1.0);
+            sendStatusUpdate({ micStatus: 'disconnected' });
+          };
+          audioTracks[0].onmute = () => {
+            setMicStatus('disconnected');
+            reportViolation('MICROPHONE_DISCONNECTED', 'MEDIUM', 1.0);
+          };
+          audioTracks[0].onunmute = () => {
+            setMicStatus('active');
+            sendStatusUpdate({ micStatus: 'active' });
+          };
+        }
+
         streamRef.current = stream;
-        // If the video element already exists, attach immediately
+        setCameraStatus('active');
+        setMicStatus('active');
+
         if (videoRef.current) {
           videoRef.current.srcObject = stream;
         }
       } catch (err) {
-        if (!cancelled) setCameraError('Webcam access blocked. The exam cannot proceed.');
+        if (!cancelled) {
+          setCameraError('Webcam/Microphone access blocked. Proctored exam cannot proceed.');
+          setCameraStatus('disconnected');
+          setMicStatus('disconnected');
+        }
       }
     };
-    getCamera();
-    return () => { cancelled = true; };
+
+    startMedia();
+
+    return () => {
+      cancelled = true;
+      if (streamRef.current) {
+        streamRef.current.getTracks().forEach(t => t.stop());
+      }
+    };
   }, []);
 
-  // ─── 2. Once loading finishes, attach stream to the video element ────────────
+  // Attach stream to video element when component finishes loading
   useEffect(() => {
     if (!loading && videoRef.current && streamRef.current) {
       videoRef.current.srcObject = streamRef.current;
     }
   }, [loading]);
 
-  // ─── 3. Fetch exam data ──────────────────────────────────────────────────────
+  // ─── 6. Network Online/Offline Handlers ─────────────────────────────────────
+  useEffect(() => {
+    const handleOnline = () => {
+      setNetworkStatus('online');
+      showStudentWarning('🟢 Connection restored — syncing progress...', 'success', 3000);
+      sendStatusUpdate({ networkStatus: 'online' });
+
+      // Auto-sync draft answers stored in localStorage during offline period
+      const savedDraft = localStorage.getItem(`exam_draft_${attemptId}`);
+      if (savedDraft) {
+        try {
+          const draftAnswers = JSON.parse(savedDraft);
+          fetch(`${API_BASE_URL}/api/attempts/${attemptId}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+            body: JSON.stringify({ answers: draftAnswers, status: 'IN_PROGRESS' }),
+          }).catch(err => console.error('Offline sync error:', err));
+        } catch (e) { /* ignore */ }
+      }
+    };
+
+    const handleOffline = () => {
+      setNetworkStatus('offline');
+      reportViolation('NETWORK_DISCONNECTED', 'LOW', 1.0);
+      sendStatusUpdate({ networkStatus: 'offline' });
+      // Protect unsaved answers in localStorage
+      localStorage.setItem(`exam_draft_${attemptId}`, JSON.stringify(answersRef.current));
+    };
+
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
+
+    return () => {
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('offline', handleOffline);
+    };
+  }, [attemptId, token, exam]);
+
+  // ─── 7. Load AI Models & Fetch Exam Details ────────────────────────────────
   useEffect(() => {
     fetchExamData();
     loadModels();
@@ -80,20 +301,19 @@ export default function ExamSession({ token, user }) {
       objectDetectorRef.current = await cocoSsd.load();
       setModelsLoaded(true);
     } catch (err) {
-      console.error('Failed to load AI models', err);
-      // AI failing doesn't block the exam
+      console.error('Failed to load Edge AI models:', err);
     }
   };
 
   const fetchExamData = async () => {
     try {
-      const res = await fetch(`https://exam-proctoring-system-vrbm.onrender.com/api/attempts/${attemptId}`, {
+      const res = await fetch(`${API_BASE_URL}/api/attempts/${attemptId}`, {
         headers: { Authorization: `Bearer ${token}` },
       });
       if (!res.ok) throw new Error('Attempt not found or unauthorized');
       const attempt = await res.json();
 
-      const examRes = await fetch(`https://exam-proctoring-system-vrbm.onrender.com/api/exams/${attempt.examId}`, {
+      const examRes = await fetch(`${API_BASE_URL}/api/exams/${attempt.examId}`, {
         headers: { Authorization: `Bearer ${token}` },
       });
       if (!examRes.ok) throw new Error('Failed to load exam data');
@@ -102,26 +322,24 @@ export default function ExamSession({ token, user }) {
       setExam(examData);
 
       if (attempt.status !== 'IN_PROGRESS') {
-        setError(`This exam attempt is ${attempt.status}`);
+        setError(`This exam attempt is ${attempt.status.toLowerCase()}`);
         setLoading(false);
         return;
       }
 
-      // ── Timer: use startedAt (the DB field name) then fall back to createdAt ──
-      const rawStart = attempt.startedAt || attempt.createdAt || attempt.startTime;
+      // Calculate time remaining based on startedAt
+      const rawStart = attempt.startedAt || attempt.createdAt;
       const startMs = rawStart ? new Date(rawStart).getTime() : Date.now();
       const nowMs = Date.now();
-      const durationMins = Number(examData.durationMinutes);
-      const durationMs = (Number.isFinite(durationMins) && durationMins > 0)
-        ? durationMins * 60000
-        : 60 * 60000; // fallback: 60 minutes if field is missing/NaN
+      const durationMins = Number(examData.durationMinutes) || 60;
+      const durationMs = durationMins * 60000;
       const remainingSecs = Math.max(1, Math.floor((startMs + durationMs - nowMs) / 1000));
-      // Guard: if remainingSecs is somehow NaN (e.g. bad date), default to full duration
       setTimeLeft(Number.isFinite(remainingSecs) ? remainingSecs : durationMins * 60);
 
       const savedAnswers = attempt.answers || {};
       setAnswers(savedAnswers);
       answersRef.current = savedAnswers;
+
       initSocket(examData._id || examData.id);
       setLoading(false);
     } catch (err) {
@@ -130,12 +348,32 @@ export default function ExamSession({ token, user }) {
     }
   };
 
+  // ─── 8. Socket.io Connection & Event Telemetry ──────────────────────────────
   const initSocket = (examId) => {
-    socketRef.current = io('https://exam-proctoring-system-vrbm.onrender.com', { auth: { token } });
-    socketRef.current.on('connect', () => {
-      socketRef.current.emit('student_join_exam', { examId, attemptId });
+    if (socketRef.current) socketRef.current.disconnect();
+
+    const socket = io(API_BASE_URL, { auth: { token } });
+    socketRef.current = socket;
+
+    socket.on('connect', () => {
+      setSocketStatus('connected');
+      const studentName = `${user?.firstName || ''} ${user?.lastName || ''}`.trim() || 'Candidate';
+      socket.emit('student_join_exam', { examId, attemptId, studentName });
+      sendStatusUpdate({ socketStatus: 'connected' });
     });
-    socketRef.current.on('proctor_command', (cmd) => {
+
+    socket.on('disconnect', (reason) => {
+      setSocketStatus('disconnected');
+      if (reason === 'io server disconnect') {
+        socket.connect();
+      }
+    });
+
+    socket.on('reconnect_attempt', () => {
+      setSocketStatus('reconnecting');
+    });
+
+    socket.on('proctor_command', (cmd) => {
       if (cmd.action === 'TERMINATE') {
         if (!exitingRef.current) {
           exitingRef.current = true;
@@ -144,32 +382,35 @@ export default function ExamSession({ token, user }) {
         }
       }
     });
+
+    socket.on('exam_force_terminated', (data) => {
+      if (!exitingRef.current) {
+        exitingRef.current = true;
+        alert(data.reason || 'Your exam session has been force-terminated by the system.');
+        stopHardwareAndExit();
+      }
+    });
   };
 
-  // ─── Keep answersRef in sync with latest answers (avoids stale closure in autoSubmit) ─
+  // Sync answersRef with React answers state
   useEffect(() => {
     answersRef.current = answers;
   }, [answers]);
 
-  // ─── 4. Timer countdown (setTimeout pattern — avoids interval teardown every second) ─
+  // ─── 9. Exam Countdown Timer & Auto-Submit ──────────────────────────────────
   useEffect(() => {
-    // Guard: null means not yet loaded; NaN/<=0 means expired
     if (timeLeft === null || !Number.isFinite(timeLeft) || timeLeft <= 0) return;
     timerStartedRef.current = true;
-    const t = setTimeout(() => setTimeLeft(prev =>
-      (Number.isFinite(prev) && prev > 0) ? prev - 1 : 0
-    ), 1000);
+    const t = setTimeout(() => setTimeLeft(prev => (Number.isFinite(prev) && prev > 0 ? prev - 1 : 0)), 1000);
     return () => clearTimeout(t);
   }, [timeLeft]);
 
-  // Auto-submit when the countdown reaches exactly 0
   useEffect(() => {
     if (timeLeft === 0 && timerStartedRef.current && !autoSubmittedRef.current) {
       autoSubmit();
     }
   }, [timeLeft]);
 
-  // Overlay countdown after time-up (counts down 5→0 then exits)
   useEffect(() => {
     if (!timeUpOverlay) return;
     if (timeUpCount <= 0) { stopHardwareAndExit(); return; }
@@ -177,81 +418,206 @@ export default function ExamSession({ token, user }) {
     return () => clearTimeout(t);
   }, [timeUpOverlay, timeUpCount]);
 
-  const exitingRef = useRef(false);
-
-  // ─── 5. AI proctoring loop ───────────────────────────────────────────────────
+  // ─── 10. Responsive AI Vision Frame Processing Loop (500ms with isProcessing Lock) ─
   useEffect(() => {
     if (!modelsLoaded) return;
-    const loop = setInterval(analyzeFrame, 3000);
-    return () => clearInterval(loop);
-  }, [modelsLoaded]);
 
-  useEffect(() => {
-    if (warningsCount > WARNINGS_LIMIT && !exitingRef.current) {
-      exitingRef.current = true;
-      alert('Maximum warnings exceeded. Your exam will be terminated.');
-      handleTerminate('Auto-terminated by system: Maximum warnings exceeded');
-    }
-  }, [warningsCount, WARNINGS_LIMIT]);
+    // Responsive 500ms loop with non-overlapping execution lock
+    aiIntervalRef.current = setInterval(() => {
+      if (!isProcessingRef.current) {
+        runInference();
+      }
+    }, 500);
 
-  const reportViolation = (type, severity = 'WARNING') => {
-    if (socketRef.current) {
-      socketRef.current.emit('student_violation', { attemptId, violationType: type, severity });
-    }
-    if (severity !== 'CRITICAL') {
-      setWarningsCount(prev => prev + 1);
-    }
-  };
+    return () => {
+      if (aiIntervalRef.current) clearInterval(aiIntervalRef.current);
+    };
+  }, [modelsLoaded, exam]);
 
-  const analyzeFrame = async () => {
-    if (!videoRef.current || videoRef.current.paused || videoRef.current.ended) return;
+  const runInference = async () => {
+    const video = videoRef.current;
+    
+    // Video Pipeline Readiness Guard: Ensure video element is loaded and producing frames
+    if (
+      !video ||
+      video.paused ||
+      video.ended ||
+      video.readyState < 2 ||
+      video.videoWidth === 0 ||
+      video.videoHeight === 0
+    ) {
+      return;
+    }
+
+    isProcessingRef.current = true;
+
     try {
+      // ── A. Responsive Face Detection ────────────────────────────────────────
+      // Use higher resolution inputSize (320) and lower initial candidate threshold (0.35)
+      // to capture natural head angles, lighting shifts, and glancing down while typing.
       const faces = await faceapi.detectAllFaces(
-        videoRef.current,
-        new faceapi.TinyFaceDetectorOptions()
+        video,
+        new faceapi.TinyFaceDetectorOptions({ inputSize: 320, scoreThreshold: 0.35 })
       );
-      if (faces.length === 0) reportViolation('No Face Detected', 'WARNING');
-      else if (faces.length > 1) reportViolation('Multiple Persons Detected', 'CRITICAL');
 
-      if (objectDetectorRef.current) {
-        const predictions = await objectDetectorRef.current.detect(videoRef.current);
-        const forbidden = predictions.filter(p =>
-          ['cell phone', 'laptop', 'book'].includes(p.class)
-        );
-        if (forbidden.length > 0) {
-          reportViolation(`Forbidden Object: ${forbidden[0].class}`, 'CRITICAL');
+      // Filter candidate detections to reject tiny background noise or false positive artifacts
+      const validFaces = faces.filter(f => {
+        const score = f.score || f.detection?.score || 0;
+        const box = f.box || f.detection?.box;
+        if (!box) return score >= 0.35;
+        return score >= 0.35 && box.width >= 30 && box.height >= 30;
+      });
+
+      const faceCount = validFaces.length;
+      setFaceCountText(faceCount);
+
+      if (faceCount === 1) {
+        // STATE: ONE_FACE (NORMAL)
+        setFaceStatusText('Detected (1 Face)');
+        setMonitoringStatusText('Active Protocol');
+        noFaceFrameCountRef.current = 0;
+        multiFaceFrameCountRef.current = 0;
+      } else if (faceCount === 0) {
+        // STATE: FACE_CHECKING -> NO_FACE (SUSPECTED -> CONFIRMED)
+        setFaceStatusText('Checking Face Presence...');
+        noFaceFrameCountRef.current += 1;
+
+        if (noFaceFrameCountRef.current < 10) {
+          // Sustained absence requirement: require ~5 seconds (10 consecutive frames @ 500ms)
+          // Prevents false positive NO_FACE warnings from brief glances, typing, or quick frame drops
+          setMonitoringStatusText('FACE_CHECKING');
+        } else {
+          // Sustained absence >= 10 consecutive frames (~5 seconds continuous) -> Confirmed NO_FACE
+          setMonitoringStatusText('NO_FACE Violation');
+          reportViolation('NO_FACE', 'MEDIUM', 0.90, { durationSec: 5, state: 'NO_FACE' });
+          noFaceFrameCountRef.current = 0;
+        }
+      } else if (faceCount >= 2) {
+        // STATE: MULTIPLE_FACES
+        setFaceStatusText(`Detected (${faceCount} Faces)`);
+        setMonitoringStatusText('Checking Multiple Faces...');
+        multiFaceFrameCountRef.current += 1;
+
+        if (multiFaceFrameCountRef.current >= 4) {
+          // Require 4 consecutive frames (~2.0 seconds) to confirm multiple faces
+          setMonitoringStatusText('MULTIPLE_FACES Violation');
+          reportViolation('MULTIPLE_FACES', 'HIGH', 0.95, { numberOfFaces: faceCount, state: 'MULTIPLE_FACES' });
+          multiFaceFrameCountRef.current = 0;
         }
       }
+
+      // ── B. Normalized Object Detection (COCO-SSD) ──────────────────────────
+      if (objectDetectorRef.current) {
+        const predictions = await objectDetectorRef.current.detect(video);
+
+        predictions.forEach(p => {
+          const score = Math.round((p.score || 0) * 100) / 100;
+          if (score < 0.60) return; // High confidence threshold (>= 60%) to prevent false object alarms
+
+          const detectedClass = (p.class || '').toLowerCase().trim();
+
+          // DO NOT classify the candidate's exam laptop as a cheating violation!
+          if (detectedClass === 'cell phone' || detectedClass === 'mobile phone') {
+            phoneFrameCountRef.current += 1;
+            if (phoneFrameCountRef.current >= 3) {
+              reportViolation('PHONE_DETECTED', 'HIGH', score, { detectedObject: 'Cell phone', confidence: score });
+              phoneFrameCountRef.current = 0;
+            }
+          } else if (detectedClass === 'book') {
+            bookFrameCountRef.current += 1;
+            if (bookFrameCountRef.current >= 3) {
+              reportViolation('BOOK_DETECTED', 'MEDIUM', score, { detectedObject: 'Book', confidence: score });
+              bookFrameCountRef.current = 0;
+            }
+          } else if (detectedClass === 'tablet') {
+            tabletFrameCountRef.current += 1;
+            if (tabletFrameCountRef.current >= 3) {
+              reportViolation('TABLET_DETECTED', 'HIGH', score, { detectedObject: 'Tablet', confidence: score });
+              tabletFrameCountRef.current = 0;
+            }
+          }
+        });
+      }
     } catch (e) {
-      console.error('AI analysis error:', e);
+      console.error('AI inference error:', e);
+    } finally {
+      isProcessingRef.current = false;
     }
   };
 
-  const handleTerminate = async (reason = 'Auto-terminated by system') => {
+  // ─── 11. Browser Visibility & Fullscreen Telemetry ───────────────────────────
+  useEffect(() => {
+    const handleVis = () => {
+      if (document.hidden) {
+        if (!isTabHiddenRef.current) {
+          isTabHiddenRef.current = true;
+          tabSwitchCountRef.current += 1;
+          reportViolation('TAB_SWITCH', 'MEDIUM', 1.0, { count: tabSwitchCountRef.current });
+        }
+      } else {
+        isTabHiddenRef.current = false;
+      }
+    };
+
+    const handleFullscreen = () => {
+      const isFull = !!document.fullscreenElement;
+      setIsFullscreen(isFull);
+      if (!isFull) {
+        if (!isFullscreenExitRef.current) {
+          isFullscreenExitRef.current = true;
+          reportViolation('FULLSCREEN_EXIT', 'MEDIUM', 1.0);
+        }
+      } else {
+        isFullscreenExitRef.current = false;
+      }
+    };
+
+    document.addEventListener('visibilitychange', handleVis);
+    document.addEventListener('fullscreenchange', handleFullscreen);
+
+    return () => {
+      document.removeEventListener('visibilitychange', handleVis);
+      document.removeEventListener('fullscreenchange', handleFullscreen);
+    };
+  }, [exam]);
+
+  // Request Fullscreen helper
+  const requestFullscreenMode = () => {
     try {
-      await fetch(`https://exam-proctoring-system-vrbm.onrender.com/api/attempts/${attemptId}/terminate`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ status: 'TERMINATED', proctorNotes: reason }),
-      });
+      if (document.documentElement.requestFullscreen) {
+        document.documentElement.requestFullscreen().catch(() => {});
+      }
     } catch (e) { /* ignore */ }
-    stopHardwareAndExit();
   };
 
+  // ─── 12. Periodic Draft Auto-Save ───────────────────────────────────────────
+  useEffect(() => {
+    if (!attemptId || !token || loading) return;
+    const saveInterval = setInterval(() => {
+      if (answersRef.current && Object.keys(answersRef.current).length > 0 && !autoSubmittedRef.current) {
+        fetch(`${API_BASE_URL}/api/attempts/${attemptId}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+          body: JSON.stringify({ answers: answersRef.current, status: 'IN_PROGRESS' }),
+        }).catch(err => console.error('Draft auto-save error:', err));
+      }
+    }, 15000);
+    return () => clearInterval(saveInterval);
+  }, [attemptId, token, loading]);
+
+  // ─── 13. Submissions & Teardown ─────────────────────────────────────────────
   const autoSubmit = async () => {
-    if (autoSubmittedRef.current) return;   // prevent double-fire
+    if (autoSubmittedRef.current) return;
     autoSubmittedRef.current = true;
-    setTimeUpOverlay(true);                 // show non-blocking overlay
+    setTimeUpOverlay(true);
     setSubmitting(true);
     try {
-      const res = await fetch(`https://exam-proctoring-system-vrbm.onrender.com/api/attempts/${attemptId}`, {
+      await fetch(`${API_BASE_URL}/api/attempts/${attemptId}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-        // Use answersRef.current — always has the very latest answers regardless of closure age
         body: JSON.stringify({ answers: answersRef.current, status: 'COMPLETED' }),
       });
-      if (!res.ok) throw new Error('Auto-submission failed');
-      // Overlay will navigate away after its 5-second countdown finishes
+      localStorage.removeItem(`exam_draft_${attemptId}`);
     } catch (err) {
       console.error('Auto-submit error:', err);
       autoSubmittedRef.current = false;
@@ -260,19 +626,30 @@ export default function ExamSession({ token, user }) {
     }
   };
 
+  // ─── 14. Auto-Submit when Warnings Reach Maximum Limit ─────────────────────
+  useEffect(() => {
+    if (exam && warningsCount >= WARNINGS_LIMIT && !autoSubmittedRef.current && !exitingRef.current) {
+      exitingRef.current = true;
+      showStudentWarning('⚠️ Maximum warnings limit reached! Automatically submitting your exam...', 'danger', 5000);
+      autoSubmit();
+    }
+  }, [warningsCount, WARNINGS_LIMIT, exam]);
+
   const handleSubmitExam = async (e, force = false) => {
     if (e) e.preventDefault();
-    if (autoSubmittedRef.current) return;   // already auto-submitted
+    if (autoSubmittedRef.current) return;
     if (!force && !window.confirm('Are you sure you want to submit your exam?')) return;
+    
     autoSubmittedRef.current = true;
     setSubmitting(true);
     try {
-      const res = await fetch(`https://exam-proctoring-system-vrbm.onrender.com/api/attempts/${attemptId}`, {
+      const res = await fetch(`${API_BASE_URL}/api/attempts/${attemptId}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
         body: JSON.stringify({ answers: answersRef.current, status: 'COMPLETED' }),
       });
       if (!res.ok) throw new Error('Submission failed');
+      localStorage.removeItem(`exam_draft_${attemptId}`);
       stopHardwareAndExit();
     } catch (err) {
       alert(err.message);
@@ -282,20 +659,18 @@ export default function ExamSession({ token, user }) {
   };
 
   const stopHardwareAndExit = () => {
-    if (streamRef.current) streamRef.current.getTracks().forEach(t => t.stop());
-    if (document.fullscreenElement) { try { document.exitFullscreen(); } catch (e) {} }
-    if (socketRef.current) socketRef.current.disconnect();
+    if (aiIntervalRef.current) clearInterval(aiIntervalRef.current);
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach(t => t.stop());
+    }
+    if (document.fullscreenElement) {
+      try { document.exitFullscreen(); } catch (e) {}
+    }
+    if (socketRef.current) {
+      socketRef.current.disconnect();
+    }
     navigate('/');
   };
-
-  // ─── 6. Tab visibility detection ────────────────────────────────────────────
-  useEffect(() => {
-    const handleVis = () => {
-      if (document.hidden) reportViolation('Tab switched or minimized', 'CRITICAL');
-    };
-    document.addEventListener('visibilitychange', handleVis);
-    return () => document.removeEventListener('visibilitychange', handleVis);
-  }, []);
 
   const handleAnswerSelect = (questionId, option) => {
     setAnswers(prev => ({ ...prev, [questionId]: option }));
@@ -327,36 +702,23 @@ export default function ExamSession({ token, user }) {
     return [];
   };
 
-
-  // ─── Loading / Error states ──────────────────────────────────────────────────
+  // ─── Render UI ──────────────────────────────────────────────────────────────
   if (loading) {
     return (
       <div className="exam-loading">
         <span className="spin text-primary">⌛</span>
-        Loading Secure Workspace...
+        Initializing Live Proctoring Workspace...
       </div>
     );
   }
 
-  if (error) {
+  if (error || cameraError) {
     return (
       <div className="exam-error bg-mesh">
         <div className="glass-card" style={{ maxWidth: 500, textAlign: 'center', margin: '100px auto' }}>
-          <h2 className="text-danger mb-3">⚠️ Access Denied</h2>
-          <p>{error}</p>
-          <button className="btn btn-secondary mt-3" onClick={() => navigate(-1)}>Go Back</button>
-        </div>
-      </div>
-    );
-  }
-
-  if (cameraError) {
-    return (
-      <div className="exam-error bg-mesh">
-        <div className="glass-card" style={{ maxWidth: 500, textAlign: 'center', margin: '100px auto' }}>
-          <h2 className="text-danger mb-3">📷 Camera Error</h2>
-          <p>{cameraError}</p>
-          <button className="btn btn-secondary mt-3" onClick={() => navigate(-1)}>Go Back</button>
+          <h2 className="text-danger mb-3">⚠️ Session Access Blocked</h2>
+          <p>{error || cameraError}</p>
+          <button className="btn btn-secondary mt-3" onClick={() => navigate(-1)}>Return to Dashboard</button>
         </div>
       </div>
     );
@@ -366,8 +728,8 @@ export default function ExamSession({ token, user }) {
     return (
       <div className="exam-error bg-mesh">
         <div className="glass-card" style={{ maxWidth: 500, textAlign: 'center', margin: '100px auto' }}>
-          <h2 className="text-danger mb-3">⚠️ No Questions</h2>
-          <p>This exam has no questions configured. Please contact your administrator.</p>
+          <h2 className="text-danger mb-3">⚠️ Empty Exam</h2>
+          <p>This exam has no questions configured. Please contact your proctor.</p>
           <button className="btn btn-secondary mt-3" onClick={() => navigate(-1)}>Go Back</button>
         </div>
       </div>
@@ -375,14 +737,13 @@ export default function ExamSession({ token, user }) {
   }
 
   const currentQuestion = exam.questions[currentQuestionIdx];
-
-  const isWarningTime = Number.isFinite(timeLeft) && timeLeft > 0 && timeLeft <= 300; // ≤5 min
+  const isWarningTime = Number.isFinite(timeLeft) && timeLeft > 0 && timeLeft <= 300;
   const timerColor = timeLeft <= 60 ? 'var(--danger)' : timeLeft <= 300 ? '#f59e0b' : 'inherit';
 
   return (
     <div className="exam-workspace bg-mesh">
 
-      {/* ── Time-Up Overlay (non-blocking, auto-navigates) ── */}
+      {/* ── Time-Up Overlay ── */}
       {timeUpOverlay && (
         <div style={{
           position: 'fixed', inset: 0, zIndex: 9999,
@@ -393,17 +754,11 @@ export default function ExamSession({ token, user }) {
           backdropFilter: 'blur(8px)',
         }}>
           <div style={{ fontSize: '4rem', marginBottom: '1rem' }}>⏰</div>
-          <h2 style={{ fontSize: '2rem', fontWeight: 800, marginBottom: '0.5rem' }}>
-            Time&apos;s Up!
-          </h2>
-          <p style={{ color: 'rgba(255,255,255,0.7)', marginBottom: '1.5rem' }}>
-            Your exam has been automatically submitted.
-          </p>
+          <h2 style={{ fontSize: '2rem', fontWeight: 800, marginBottom: '0.5rem' }}>Time&apos;s Up!</h2>
+          <p style={{ color: 'rgba(255,255,255,0.7)', marginBottom: '1.5rem' }}>Your exam has been automatically submitted.</p>
           <div style={{
-            fontSize: '3.5rem', fontWeight: 900,
-            color: '#f59e0b',
-            background: 'rgba(245,158,11,0.15)',
-            border: '2px solid rgba(245,158,11,0.4)',
+            fontSize: '3.5rem', fontWeight: 900, color: '#f59e0b',
+            background: 'rgba(245,158,11,0.15)', border: '2px solid rgba(245,158,11,0.4)',
             borderRadius: '50%', width: '80px', height: '80px',
             display: 'flex', alignItems: 'center', justifyContent: 'center',
           }}>
@@ -415,63 +770,88 @@ export default function ExamSession({ token, user }) {
         </div>
       )}
 
-      {/* ── Low-time warning banner ── */}
-      {isWarningTime && !timeUpOverlay && (
+      {/* ── Live Warning / Notification Banner ── */}
+      {activeWarning && (
         <div style={{
-          position: 'fixed', top: 0, left: 0, right: 0, zIndex: 1000,
-          background: timeLeft <= 60
-            ? 'rgba(239,68,68,0.9)'
-            : 'rgba(245,158,11,0.85)',
-          color: '#fff', textAlign: 'center',
-          padding: '0.5rem 1rem', fontWeight: 700, fontSize: '0.95rem',
-          backdropFilter: 'blur(4px)',
-          animation: 'pulse 1.5s infinite',
+          position: 'fixed', top: '15px', left: '50%', transform: 'translateX(-50%)', zIndex: 9000,
+          background: activeWarning.type === 'danger' ? 'rgba(239, 68, 68, 0.95)' : activeWarning.type === 'success' ? 'rgba(16, 185, 129, 0.95)' : 'rgba(245, 158, 11, 0.95)',
+          color: '#fff', padding: '0.6rem 1.5rem', borderRadius: '30px', fontWeight: 700,
+          boxShadow: '0 10px 25px rgba(0,0,0,0.3)', backdropFilter: 'blur(6px)', animation: 'bounce-in 0.3s',
         }}>
-          {timeLeft <= 60
-            ? `⚠️ Less than 1 minute remaining! — ${formatTime(timeLeft)}`
-            : `⏳ Only ${Math.ceil(timeLeft / 60)} minutes left — ${formatTime(timeLeft)}`}
+          {activeWarning.message}
         </div>
       )}
 
-      {/* Top Bar */}
-      <header className="workspace-header glass-panel" style={{ marginTop: isWarningTime && !timeUpOverlay ? '2.5rem' : 0, transition: 'margin 0.3s' }}>
+      {/* ── Fullscreen Exit Prompt Banner ── */}
+      {!isFullscreen && (
+        <div style={{
+          position: 'fixed', top: activeWarning ? '65px' : '15px', left: '50%', transform: 'translateX(-50%)', zIndex: 8900,
+          background: 'rgba(239, 68, 68, 0.90)', color: '#fff', padding: '0.5rem 1.25rem', borderRadius: '8px',
+          display: 'flex', alignItems: 'center', gap: '12px', fontSize: '0.85rem', fontWeight: 600,
+        }}>
+          <span>⚠️ You are not in fullscreen mode!</span>
+          <button className="btn btn-sm btn-secondary" onClick={requestFullscreenMode} style={{ padding: '0.2rem 0.6rem', fontSize: '0.75rem' }}>
+            Return to Fullscreen
+          </button>
+        </div>
+      )}
+
+      {/* ── Low Time Warning Banner ── */}
+      {isWarningTime && !timeUpOverlay && (
+        <div style={{
+          position: 'fixed', top: 0, left: 0, right: 0, zIndex: 1000,
+          background: timeLeft <= 60 ? 'rgba(239,68,68,0.9)' : 'rgba(245,158,11,0.85)',
+          color: '#fff', textAlign: 'center', padding: '0.4rem 1rem', fontWeight: 700, fontSize: '0.9rem',
+        }}>
+          {timeLeft <= 60
+            ? `⚠️ Less than 1 minute remaining! — ${formatTime(timeLeft)}`
+            : `⏳ ${Math.ceil(timeLeft / 60)} minutes left — ${formatTime(timeLeft)}`}
+        </div>
+      )}
+
+      {/* Top Header */}
+      <header className="workspace-header glass-panel" style={{ marginTop: isWarningTime && !timeUpOverlay ? '2.5rem' : 0 }}>
         <div className="exam-brand">
           <span className="exam-title">{exam.title}</span>
         </div>
+
+        {/* Real-time Telemetry Status Badges */}
+        <div style={{ display: 'flex', gap: '8px', alignItems: 'center', fontSize: '0.75rem' }}>
+          <span className={`badge ${networkStatus === 'online' ? 'badge-success' : 'badge-danger'}`} title="Network Connectivity">
+            🌐 {networkStatus}
+          </span>
+          <span className={`badge ${cameraStatus === 'active' ? 'badge-success' : 'badge-danger'}`} title="Camera Status">
+            📷 {cameraStatus}
+          </span>
+          <span className={`badge ${micStatus === 'active' ? 'badge-success' : 'badge-warning'}`} title="Microphone Status">
+            🎙️ {micStatus}
+          </span>
+        </div>
+
         <div className="exam-controls">
-          <div className="timer-badge glass-card" style={{ padding: '0.4rem 1rem', color: timerColor, fontWeight: 700, transition: 'color 0.5s' }}>
+          <div className="timer-badge glass-card" style={{ padding: '0.4rem 1rem', color: timerColor, fontWeight: 700 }}>
             <span className="timer-icon">⏱️</span> {formatTime(timeLeft)}
           </div>
-          <button
-            className="btn btn-success"
-            onClick={handleSubmitExam}
-            disabled={submitting}
-          >
+          <button className="btn btn-success" onClick={handleSubmitExam} disabled={submitting}>
             {submitting ? 'Submitting...' : 'Submit Exam'}
           </button>
         </div>
       </header>
 
       <div className="workspace-body">
-
-        {/* Main Question Area */}
+        {/* Main Question Workspace */}
         <main className="workspace-main glass-panel fade-in-up">
           <div className="question-header">
             <h3>Question {currentQuestionIdx + 1} of {exam.questions.length}</h3>
             <span className="badge badge-primary">{currentQuestion.points} points</span>
           </div>
 
-          <div className="question-text">
-            {currentQuestion.questionText}
-          </div>
+          <div className="question-text">{currentQuestion.questionText}</div>
 
           {currentQuestion.questionType === 'MCQ' && (
             <div className="options-list">
               {getQuestionOptions(currentQuestion).map((opt, i) => (
-                <label
-                  key={i}
-                  className={`option-box ${answers[currentQuestion._id] === opt ? 'selected' : ''}`}
-                >
+                <label key={i} className={`option-box ${answers[currentQuestion._id] === opt ? 'selected' : ''}`}>
                   <input
                     type="radio"
                     name={`q-${currentQuestion._id}`}
@@ -506,11 +886,7 @@ export default function ExamSession({ token, user }) {
               ← Previous
             </button>
             {currentQuestionIdx === exam.questions.length - 1 ? (
-              <button
-                className="btn btn-success"
-                onClick={handleSubmitExam}
-                disabled={submitting}
-              >
+              <button className="btn btn-success" onClick={handleSubmitExam} disabled={submitting}>
                 {submitting ? 'Submitting...' : 'Submit Exam'}
               </button>
             ) : (
@@ -524,28 +900,51 @@ export default function ExamSession({ token, user }) {
           </div>
         </main>
 
-        {/* Sidebar */}
+        {/* Sidebar Feed & Navigation */}
         <aside className="workspace-sidebar">
-
           {/* Live Camera Feed */}
           <div className="proctor-feed glass-panel">
             <div className="feed-header">
-              <h4>📷 Your Camera</h4>
-              {modelsLoaded
-                ? <span className="status-dot active" title="AI Proctoring Active" />
-                : <span className="status-dot warning" title="Loading AI..." />
-              }
+              <h4>📷 Live Monitor Feed</h4>
+              {modelsLoaded ? (
+                <span className="status-dot active" title="AI Proctoring Active" />
+              ) : (
+                <span className="status-dot warning" title="Loading AI Models..." />
+              )}
             </div>
+
             <div className="feed-video-wrap">
-              {/* video element — stream is attached via ref after loading */}
-              <video
-                ref={videoRef}
-                autoPlay
-                muted
-                playsInline
-                className="proctor-video"
-              />
+              <video ref={videoRef} autoPlay muted playsInline className="proctor-video" />
             </div>
+
+            {/* Continuous Responsiveness Telemetry Display */}
+            <div className="live-telemetry-panel mt-2 p-2" style={{ background: 'rgba(0,0,0,0.2)', borderRadius: '6px', fontSize: '0.75rem' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '2px' }}>
+                <span className="text-muted">Camera:</span>
+                <span style={{ fontWeight: 600, color: cameraStatus === 'active' ? 'var(--success)' : 'var(--danger)' }}>
+                  {cameraStatus === 'active' ? 'Connected' : 'Disconnected'}
+                </span>
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '2px' }}>
+                <span className="text-muted">Face:</span>
+                <span style={{ fontWeight: 600, color: faceStatusText === 'Detected' ? 'var(--success)' : 'var(--warning)' }}>
+                  {faceStatusText}
+                </span>
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '2px' }}>
+                <span className="text-muted">Faces:</span>
+                <span style={{ fontWeight: 700, color: faceCountText === 1 ? 'var(--success)' : faceCountText === 0 ? 'var(--warning)' : 'var(--danger)' }}>
+                  {faceCountText}
+                </span>
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                <span className="text-muted">Monitoring:</span>
+                <span style={{ fontWeight: 600, color: monitoringStatusText.includes('Violation') ? 'var(--danger)' : 'var(--primary)' }}>
+                  {monitoringStatusText}
+                </span>
+              </div>
+            </div>
+
             <div className="feed-status mt-2">
               <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
                 Warnings: {warningsCount} / {WARNINGS_LIMIT}
@@ -582,7 +981,6 @@ export default function ExamSession({ token, user }) {
               <span className="legend-item"><div className="legend-box current" /> Current</span>
             </div>
           </div>
-
         </aside>
       </div>
     </div>
