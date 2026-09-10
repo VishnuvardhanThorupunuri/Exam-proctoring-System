@@ -100,9 +100,14 @@ const login = async (req, res) => {
 };
 
 // Auth: Profile
+const mongoose = require('mongoose');
+
 const getProfile = async (req, res) => {
   try {
-    const user = await User.findById(req.user?.id).select('-passwordHash');
+    if (!req.user?.id || !mongoose.Types.ObjectId.isValid(req.user.id)) {
+      return res.status(401).json({ error: 'Invalid or missing user token' });
+    }
+    const user = await User.findById(req.user.id).select('-passwordHash');
     if (!user) return res.status(404).json({ error: 'User not found' });
     
     const obj = user.toObject();

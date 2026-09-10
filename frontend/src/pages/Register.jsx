@@ -40,7 +40,11 @@ export default function Register() {
       if (!res.ok) throw new Error(data.error || 'Registration failed');
       navigate('/login');
     } catch (err) {
-      setError(err.message);
+      if (err.name === 'TypeError' || err.message.includes('fetch') || err.message.includes('Failed to fetch')) {
+        setError('Unable to connect to authentication server. Please ensure the backend is running on port 5000.');
+      } else {
+        setError(err.message);
+      }
     } finally {
       setSubmitting(false);
     }

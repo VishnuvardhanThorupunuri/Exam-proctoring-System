@@ -17,38 +17,60 @@ function App() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
+    let isMounted = true;
+
     const fetchProfile = async () => {
       if (!token) {
-        setLoading(false);
+        if (isMounted) {
+          setUser(null);
+          setLoading(false);
+        }
         return;
       }
+
+      // If user data was already supplied (e.g. during handleLogin), skip extra profile fetch
+      if (user && user.id) {
+        if (isMounted) setLoading(false);
+        return;
+      }
+
       try {
         const response = await fetch(`${API_BASE_URL}/api/auth/profile`, {
           headers: { Authorization: `Bearer ${token}` },
         });
         if (response.ok) {
           const userData = await response.json();
-          setUser(userData);
+          if (isMounted) setUser(userData);
         } else {
           localStorage.removeItem('token');
-          setToken(null);
+          if (isMounted) {
+            setToken(null);
+            setUser(null);
+          }
         }
       } catch (err) {
         console.error('Failed to fetch user profile:', err);
-        // Clear stale token so we don't get stuck in an infinite redirect loop
         localStorage.removeItem('token');
-        setToken(null);
+        if (isMounted) {
+          setToken(null);
+          setUser(null);
+        }
       } finally {
-        setLoading(false);
+        if (isMounted) setLoading(false);
       }
     };
+
     fetchProfile();
+
+    return () => {
+      isMounted = false;
+    };
   }, [token]);
 
   const handleLogin = (newToken, userData) => {
     localStorage.setItem('token', newToken);
-    setToken(newToken);
     setUser(userData);
+    setToken(newToken);
   };
 
   const handleLogout = () => {
@@ -77,7 +99,7 @@ function App() {
   }
 
   return (
-    <Router>
+    <Router future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
       <div style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column' }}>
         {token && user && <Navbar user={user} onLogout={handleLogout} />}
         <div style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>

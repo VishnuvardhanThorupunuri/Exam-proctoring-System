@@ -20,8 +20,8 @@ export default function ExamSession({ token, user }) {
   const [error, setError] = useState(null);
 
   // Overlay and navigation guards
-  const [timeUpOverlay, setTimeUpOverlay] = useState(false);
-  const [timeUpCount, setTimeUpCount] = useState(5);
+  const [autoSubmitReason, setAutoSubmitReason] = useState(null); // 'TIME_UP' | 'MAX_WARNINGS' | null
+  const [autoSubmitCount, setAutoSubmitCount] = useState(6);
   const timerStartedRef = useRef(false);
   const autoSubmittedRef = useRef(false);
   const answersRef = useRef({});
@@ -407,16 +407,16 @@ export default function ExamSession({ token, user }) {
 
   useEffect(() => {
     if (timeLeft === 0 && timerStartedRef.current && !autoSubmittedRef.current) {
-      autoSubmit();
+      autoSubmit('TIME_UP');
     }
   }, [timeLeft]);
 
   useEffect(() => {
-    if (!timeUpOverlay) return;
-    if (timeUpCount <= 0) { stopHardwareAndExit(); return; }
-    const t = setTimeout(() => setTimeUpCount(c => c - 1), 1000);
+    if (!autoSubmitReason) return;
+    if (autoSubmitCount <= 0) { stopHardwareAndExit(); return; }
+    const t = setTimeout(() => setAutoSubmitCount(c => c - 1), 1000);
     return () => clearTimeout(t);
-  }, [timeUpOverlay, timeUpCount]);
+  }, [autoSubmitReason, autoSubmitCount]);
 
   // ─── 10. Responsive AI Vision Frame Processing Loop (500ms with isProcessing Lock) ─
   useEffect(() => {
@@ -606,10 +606,11 @@ export default function ExamSession({ token, user }) {
   }, [attemptId, token, loading]);
 
   // ─── 13. Submissions & Teardown ─────────────────────────────────────────────
-  const autoSubmit = async () => {
+  const autoSubmit = async (reason = 'TIME_UP') => {
     if (autoSubmittedRef.current) return;
     autoSubmittedRef.current = true;
-    setTimeUpOverlay(true);
+    setAutoSubmitReason(reason);
+    setAutoSubmitCount(reason === 'MAX_WARNINGS' ? 6 : 5);
     setSubmitting(true);
     try {
       await fetch(`${API_BASE_URL}/api/attempts/${attemptId}`, {
@@ -622,7 +623,7 @@ export default function ExamSession({ token, user }) {
       console.error('Auto-submit error:', err);
       autoSubmittedRef.current = false;
       setSubmitting(false);
-      setTimeUpOverlay(false);
+      setAutoSubmitReason(null);
     }
   };
 
@@ -630,8 +631,8 @@ export default function ExamSession({ token, user }) {
   useEffect(() => {
     if (exam && warningsCount >= WARNINGS_LIMIT && !autoSubmittedRef.current && !exitingRef.current) {
       exitingRef.current = true;
-      showStudentWarning('⚠️ Maximum warnings limit reached! Automatically submitting your exam...', 'danger', 5000);
-      autoSubmit();
+      showStudentWarning(`🚨 Maximum warning threshold reached (${warningsCount}/${WARNINGS_LIMIT})! Submitting exam...`, 'danger', 6000);
+      autoSubmit('MAX_WARNINGS');
     }
   }, [warningsCount, WARNINGS_LIMIT, exam]);
 
@@ -671,8 +672,7 @@ export default function ExamSession({ token, user }) {
     }
     navigate('/');
   };
-
-  const handleAnswerSelect = (questionId, option) => {
+    const handleAnswerSelect = (questionId, option) => {
     setAnswers(prev => ({ ...prev, [questionId]: option }));
   };
 
@@ -744,10 +744,10 @@ export default function ExamSession({ token, user }) {
     <div className="exam-workspace bg-mesh">
 
       {/* ── Time-Up Overlay ── */}
-      {timeUpOverlay && (
+      {autoSubmitReason === 'TIME_UP' && (
         <div style={{
           position: 'fixed', inset: 0, zIndex: 9999,
-          background: 'rgba(0,0,0,0.85)',
+          background: 'rgba(0,0,0,0.88)',
           display: 'flex', flexDirection: 'column',
           alignItems: 'center', justifyContent: 'center',
           color: '#fff', textAlign: 'center',
@@ -755,18 +755,81 @@ export default function ExamSession({ token, user }) {
         }}>
           <div style={{ fontSize: '4rem', marginBottom: '1rem' }}>⏰</div>
           <h2 style={{ fontSize: '2rem', fontWeight: 800, marginBottom: '0.5rem' }}>Time&apos;s Up!</h2>
-          <p style={{ color: 'rgba(255,255,255,0.7)', marginBottom: '1.5rem' }}>Your exam has been automatically submitted.</p>
+          <p style={{ color: 'rgba(255,255,255,0.7)', marginBottom: '1.5rem' }}>Your examination duration has elapsed and your answers have been automatically submitted.</p>
           <div style={{
             fontSize: '3.5rem', fontWeight: 900, color: '#f59e0b',
             background: 'rgba(245,158,11,0.15)', border: '2px solid rgba(245,158,11,0.4)',
             borderRadius: '50%', width: '80px', height: '80px',
             display: 'flex', alignItems: 'center', justifyContent: 'center',
           }}>
-            {timeUpCount}
+            {autoSubmitCount}
           </div>
           <p style={{ marginTop: '1rem', fontSize: '0.9rem', color: 'rgba(255,255,255,0.5)' }}>
-            Redirecting in {timeUpCount} second{timeUpCount !== 1 ? 's' : ''}…
+            Redirecting to dashboard in {autoSubmitCount} second{autoSubmitCount !== 1 ? 's' : ''}…
           </p>
+          <button
+            className="btn btn-primary mt-4"
+            onClick={stopHardwareAndExit}
+          >
+            Return to Candidate Dashboard Now
+          </button>
+        </div>
+      )}
+
+      {/* ── Max Warnings Overlay ── */}
+      {autoSubmitReason === 'MAX_WARNINGS' && (
+        <div style={{
+          position: 'fixed', inset: 0, zIndex: 9999,
+          background: 'rgba(0,0,0,0.88)',
+          display: 'flex', flexDirection: 'column',
+          alignItems: 'center', justifyContent: 'center',
+          color: '#fff', textAlign: 'center',
+          backdropFilter: 'blur(8px)',
+          padding: '2rem'
+        }}>
+          <div style={{ fontSize: '4rem', marginBottom: '1rem' }}>🚨</div>
+          <h2 style={{ fontSize: '2rem', fontWeight: 800, marginBottom: '0.5rem', color: '#ef4444' }}>
+            Maximum Warning Threshold Exceeded
+          </h2>
+          <p style={{ color: 'rgba(255,255,255,0.7)', marginBottom: '1.5rem', maxWidth: '500px' }}>
+            Your exam session has been terminated due to multiple proctoring rule violations.
+          </p>
+
+          <div style={{ width: '100%', maxWidth: '400px', margin: '0 auto 1.5rem', textAlign: 'left' }}>
+            <div className="summary-row" style={{ display: 'flex', justifyContent: 'space-between', padding: '0.5rem 0', borderBottom: '1px solid rgba(255,255,255,0.1)' }}>
+              <span className="summary-label">🔒 Session Status</span>
+              <span className="summary-value" style={{ color: '#ef4444', fontWeight: 700 }}>
+                TERMINATED & SUBMITTED
+              </span>
+            </div>
+            <div className="summary-row" style={{ display: 'flex', justifyContent: 'space-between', padding: '0.5rem 0', borderBottom: '1px solid rgba(255,255,255,0.1)' }}>
+              <span className="summary-label">💾 Saved Progress</span>
+              <span className="summary-value" style={{ color: '#10b981', fontWeight: 600 }}>
+                Answers Saved & Synced
+              </span>
+            </div>
+          </div>
+
+          <div className="max-warnings-notice alert alert-warning" style={{ background: 'rgba(245,158,11,0.15)', border: '1px solid rgba(245,158,11,0.3)', color: '#f59e0b', padding: '0.75rem 1rem', borderRadius: '8px', marginBottom: '1.5rem', maxWidth: '500px' }}>
+            <span>ℹ️</span> All proctoring logs and recorded telemetry evidence have been saved for proctor review.
+          </div>
+
+          <div className="max-warnings-countdown-wrap" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '0.5rem', marginBottom: '1.5rem' }}>
+            <div className="max-warnings-ring" style={{ fontSize: '2.5rem', fontWeight: 800, color: '#ef4444' }}>
+              {autoSubmitCount}
+            </div>
+            <p className="max-warnings-redirect-text" style={{ color: 'rgba(255,255,255,0.6)', fontSize: '0.9rem' }}>
+              Auto-redirecting in {autoSubmitCount} second{autoSubmitCount !== 1 ? 's' : ''}…
+            </p>
+          </div>
+
+          <button
+            className="btn btn-primary btn-lg max-warnings-exit-btn"
+            style={{ padding: '0.75rem 2rem', fontWeight: 700 }}
+            onClick={stopHardwareAndExit}
+          >
+            Return to Candidate Dashboard Now
+          </button>
         </div>
       )}
 
@@ -797,7 +860,7 @@ export default function ExamSession({ token, user }) {
       )}
 
       {/* ── Low Time Warning Banner ── */}
-      {isWarningTime && !timeUpOverlay && (
+      {isWarningTime && !autoSubmitReason && (
         <div style={{
           position: 'fixed', top: 0, left: 0, right: 0, zIndex: 1000,
           background: timeLeft <= 60 ? 'rgba(239,68,68,0.9)' : 'rgba(245,158,11,0.85)',
@@ -810,7 +873,7 @@ export default function ExamSession({ token, user }) {
       )}
 
       {/* Top Header */}
-      <header className="workspace-header glass-panel" style={{ marginTop: isWarningTime && !timeUpOverlay ? '2.5rem' : 0 }}>
+      <header className="workspace-header glass-panel" style={{ marginTop: isWarningTime && !autoSubmitReason ? '2.5rem' : 0 }}>
         <div className="exam-brand">
           <span className="exam-title">{exam.title}</span>
         </div>

@@ -101,8 +101,7 @@ const connectDB = async () => {
     console.log('MongoDB connected successfully');
     await seedDatabase();
   } catch (err) {
-    console.error('MongoDB connection error:', err);
-    process.exit(1);
+    console.error('MongoDB connection error:', err.message);
   }
 };
 

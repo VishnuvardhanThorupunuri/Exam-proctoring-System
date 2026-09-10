@@ -20,16 +20,32 @@ export default function StudentDashboard({ token, user, onLogout }) {
   useEffect(() => {
     fetchExams();
 
-    const socket = io(API_BASE_URL, { auth: { token } });
-    socket.on('connect', () => {
-      if (user?.id) socket.join?.(`student_${user.id}`);
+    if (!token) return;
+
+    const socket = io(API_BASE_URL, {
+      auth: { token },
+      transports: ['websocket', 'polling'],
+      autoConnect: true,
     });
+
+    const handleConnect = () => {
+      if (user?.id) {
+        socket.emit('student_join_exam', { studentId: user.id });
+      }
+    };
     const handleReattempt = () => fetchExams();
+
+    socket.on('connect', handleConnect);
     socket.on('proctoring:reattempt_allowed', handleReattempt);
     socket.on('reattempt_enabled', handleReattempt);
 
-    return () => socket.disconnect();
-  }, [token, user]);
+    return () => {
+      socket.off('connect', handleConnect);
+      socket.off('proctoring:reattempt_allowed', handleReattempt);
+      socket.off('reattempt_enabled', handleReattempt);
+      socket.disconnect();
+    };
+  }, [token, user?.id]);
 
   const fetchExams = async () => {
     try {
