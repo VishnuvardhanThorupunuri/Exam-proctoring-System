@@ -34,19 +34,13 @@ export default function Login({ onLogin }) {
       navigate('/');
     } catch (err) {
       if (err.name === 'TypeError' || err.message.includes('fetch') || err.message.includes('Failed to fetch')) {
-        setError('Unable to connect to authentication server. Please ensure the backend is running on port 5000.');
+        setError('Unable to connect to authentication server. If the cloud server is waking up, please allow ~30 seconds and retry.');
       } else {
         setError(err.message);
       }
     } finally {
       setSubmitting(false);
     }
-  };
-
-  const fillCredentials = (role) => {
-    if (role === 'STUDENT')  { setEmail('student@gmail.com');  setPassword('password123'); }
-    if (role === 'PROCTOR')  { setEmail('proctor@gmail.com');  setPassword('password123'); }
-    if (role === 'ADMIN')    { setEmail('admin@gmail.com');    setPassword('password123'); }
   };
 
   return (
@@ -130,21 +124,6 @@ export default function Login({ onLogin }) {
           Don't have an account? <Link to="/register" id="goto-register">Register here</Link>
         </p>
 
-        {/* Demo profiles */}
-        <div className="login-demo">
-          <p className="login-demo-label">⚡ Demo Quick Login</p>
-          <div className="login-demo-btns">
-            <button id="demo-student" onClick={() => fillCredentials('STUDENT')} className="demo-btn">
-              🎓 Student
-            </button>
-            <button id="demo-proctor" onClick={() => fillCredentials('PROCTOR')} className="demo-btn">
-              👁️ Proctor
-            </button>
-            <button id="demo-admin" onClick={() => fillCredentials('ADMIN')} className="demo-btn">
-              ⚙️ Admin
-            </button>
-          </div>
-        </div>
       </div>
     </div>
   );

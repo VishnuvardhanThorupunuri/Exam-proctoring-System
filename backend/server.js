@@ -25,12 +25,36 @@ const PORT = process.env.PORT || 5000;
 app.use(cors());
 app.use(express.json());
 
+const mongoose = require('mongoose');
+
 // Database connection
 connectDB();
 
 // Rest API Routes
 app.get('/api/health', (req, res) => {
-  res.json({ status: 'ok', timestamp: new Date() });
+  const dbStates = ['disconnected', 'connected', 'connecting', 'disconnecting'];
+  const state = dbStates[mongoose.connection.readyState] || 'unknown';
+  res.json({
+    status: 'ok',
+    database: state,
+    databaseHost: mongoose.connection.host || null,
+    timestamp: new Date()
+  });
+});
+
+// Database readiness middleware
+app.use((req, res, next) => {
+  if (req.path.startsWith('/api') && req.path !== '/api/health') {
+    if (mongoose.connection.readyState !== 1) {
+      if (mongoose.connection.readyState === 0) {
+        connectDB();
+      }
+      return res.status(503).json({
+        error: 'Database connection is initializing. Please try again in a few moments.'
+      });
+    }
+  }
+  next();
 });
 
 // Import route groups

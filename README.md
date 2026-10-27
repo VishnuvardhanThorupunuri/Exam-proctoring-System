@@ -30,7 +30,7 @@ The React portal will boot locally on **http://localhost:3000**.
 
 ##  Test Credentials (Pre-seeded)
 
-Use these credentials on the login screen, or click the **Demo Quick Login Profiles** buttons at the bottom of the card:
+Use these credentials on the login screen:
 
 | Role | Email | Password | Access Capabilities |
 | :--- | :--- | :--- | :--- |

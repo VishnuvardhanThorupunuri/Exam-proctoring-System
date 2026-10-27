@@ -41,7 +41,7 @@ export default function Register() {
       navigate('/login');
     } catch (err) {
       if (err.name === 'TypeError' || err.message.includes('fetch') || err.message.includes('Failed to fetch')) {
-        setError('Unable to connect to authentication server. Please ensure the backend is running on port 5000.');
+        setError('Unable to connect to authentication server. If the cloud server is waking up, please allow ~30 seconds and retry.');
       } else {
         setError(err.message);
       }

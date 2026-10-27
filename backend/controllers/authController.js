@@ -104,7 +104,7 @@ const mongoose = require('mongoose');
 
 const getProfile = async (req, res) => {
   try {
-    if (!req.user?.id || !mongoose.Types.ObjectId.isValid(req.user.id)) {
+    if (!req.user?.id) {
       return res.status(401).json({ error: 'Invalid or missing user token' });
     }
     const user = await User.findById(req.user.id).select('-passwordHash');
