@@ -4,6 +4,7 @@ const jwt = require('jsonwebtoken');
 const Exam = require('../models/Exam');
 const ExamAttempt = require('../models/ExamAttempt');
 const ProctorViolation = require('../models/ProctorViolation');
+const { getViolationDisplayName } = require('../config/violationConfig');
 
 const JWT_SECRET = process.env.JWT_SECRET || 'exam-proctoring-super-secret-key-12345!';
 
@@ -160,6 +161,8 @@ const getUsersWithAttempts = async (req, res) => {
         attemptObj.violations = violations.map(v => {
           const vObj = v.toObject();
           vObj.id = vObj._id;
+          vObj.violationName = getViolationDisplayName(vObj.violationType);
+          vObj.displayName = getViolationDisplayName(vObj.violationType);
           return vObj;
         });
 

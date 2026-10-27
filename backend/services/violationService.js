@@ -1,7 +1,7 @@
 const ExamAttempt = require('../models/ExamAttempt');
 const ProctorViolation = require('../models/ProctorViolation');
 const User = require('../models/User');
-const { VIOLATION_CONFIG } = require('../config/violationConfig');
+const { VIOLATION_CONFIG, normalizeViolationType, getViolationDisplayName } = require('../config/violationConfig');
 
 class ViolationService {
   constructor() {
@@ -30,10 +30,11 @@ class ViolationService {
    * Check if a violation trigger is currently within its cooldown window
    */
   isCoolingDown(attemptId, violationType) {
-    const config = VIOLATION_CONFIG[violationType];
+    const normType = normalizeViolationType(violationType);
+    const config = VIOLATION_CONFIG[normType];
     if (!config || !config.cooldown) return false;
 
-    const key = `${attemptId}:${violationType}`;
+    const key = `${attemptId}:${normType}`;
     const lastTime = this.cooldownMap.get(key);
     const now = Date.now();
 
@@ -54,7 +55,8 @@ class ViolationService {
       return { valid: false, reason: 'Payload must be a non-null object' };
     }
 
-    const { attemptId, examId, type, confidence, timestamp, metadata, snapshotData, snapshotUrl } = rawPayload;
+    const { attemptId, examId, confidence, timestamp, metadata, snapshotData, snapshotUrl } = rawPayload;
+    const rawType = rawPayload.type || rawPayload.violationType;
 
     if (!attemptId || typeof attemptId !== 'string') {
       return { valid: false, reason: 'Missing or invalid attemptId' };
@@ -62,10 +64,12 @@ class ViolationService {
     if (!examId || typeof examId !== 'string') {
       return { valid: false, reason: 'Missing or invalid examId' };
     }
-    if (!type || !VIOLATION_CONFIG[type]) {
+
+    const candidateType = normalizeViolationType(rawType);
+    if (!candidateType || !VIOLATION_CONFIG[candidateType]) {
       return {
         valid: false,
-        reason: `Invalid or unconfigured violation type "${type}". Allowed: ${Object.keys(VIOLATION_CONFIG).join(', ')}`,
+        reason: `Invalid or unconfigured violation type "${rawType}". Allowed: ${Object.keys(VIOLATION_CONFIG).join(', ')}`,
       };
     }
 
@@ -83,7 +87,7 @@ class ViolationService {
       data: {
         attemptId,
         examId,
-        type,
+        type: candidateType,
         confidence: conf,
         timestamp: timestamp ? new Date(timestamp) : new Date(),
         metadata: metadata || null,
@@ -127,7 +131,7 @@ class ViolationService {
       return { success: false, status: 'NOT_FOUND', reason: 'Attempt not found' };
     }
 
-    if (attempt.studentId !== socketUser.id) {
+    if (String(attempt.studentId) !== String(socketUser.id)) {
       console.warn(
         `[VIOLATION SECURITY] User ${socketUser.id} tried to report violation for attempt owned by ${attempt.studentId}`
       );
@@ -203,6 +207,9 @@ class ViolationService {
       deviceSessionId,
       type,
       violationType: type,
+      violationName: config.displayName || type,
+      displayName: config.displayName || type,
+      description: config.description,
       severity: serverSeverity,
       confidence,
       previousRiskScore,

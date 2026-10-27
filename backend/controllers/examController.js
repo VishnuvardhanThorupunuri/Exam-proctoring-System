@@ -1,6 +1,7 @@
 const Exam = require('../models/Exam');
 const ExamAttempt = require('../models/ExamAttempt');
 const ProctorViolation = require('../models/ProctorViolation');
+const { getViolationDisplayName } = require('../config/violationConfig');
 
 // Exams: Get All Active Exams
 const getAllExams = async (req, res) => {
@@ -139,6 +140,8 @@ const getExamAttempts = async (req, res) => {
       obj.violations = violations.map(v => {
         const vObj = v.toObject();
         vObj.id = vObj._id;
+        vObj.violationName = getViolationDisplayName(vObj.violationType);
+        vObj.displayName = getViolationDisplayName(vObj.violationType);
         return vObj;
       });
 

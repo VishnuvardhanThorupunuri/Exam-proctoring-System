@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { io } from 'socket.io-client';
 import { API_BASE_URL } from '../config';
+import { getViolationDisplayName, getViolationIcon } from '../utils/violationUtils';
 import './ProctorDashboard.css';
 
 function AlertCard({ alert, onClose }) {
@@ -13,7 +14,7 @@ function AlertCard({ alert, onClose }) {
         <div className="alert-icon">{isHigh ? '🚨' : '⚠️'}</div>
         <div className="alert-text">
           <div className="alert-title">
-            <strong>{alert.studentName}</strong> – {alert.type || alert.violationType}
+            <strong>{alert.studentName}</strong> – {getViolationIcon(alert.type || alert.violationType)} {getViolationDisplayName(alert.type || alert.violationType)}
           </div>
           <div className="alert-meta">
             Risk: <span className="badge badge-danger" style={{ fontSize: '0.65rem' }}>{alert.riskLevel || alert.severity || 'LOW'}</span>
@@ -197,11 +198,14 @@ export default function ProctorDashboard({ token, user, onLogout }) {
     socket.emit('proctor_join_exam', { examId: selectedExam.id });
 
     const handleAlert = (payload) => {
+      const violationName = getViolationDisplayName(payload.type || payload.violationType);
       const newAlert = {
         id: payload.violationId || payload.id || Date.now(),
         studentName: payload.studentName || 'Candidate',
         violationType: payload.type || payload.violationType,
         type: payload.type || payload.violationType,
+        violationName,
+        displayName: violationName,
         severity: payload.severity || 'HIGH',
         timestamp: payload.timestamp || new Date(),
         currentScore: payload.currentScore ?? payload.integrityScore,
@@ -653,7 +657,9 @@ export default function ProctorDashboard({ token, user, onLogout }) {
                                                       <span className={`badge ${v.severity === 'HIGH' || v.severity === 'CRITICAL' ? 'badge-danger' : 'badge-warning'}`} style={{ fontSize: '0.7rem' }}>
                                                         {v.severity}
                                                       </span>
-                                                      <strong style={{ fontSize: '0.85rem' }}>{v.violationType || v.type}</strong>
+                                                      <strong style={{ fontSize: '0.85rem' }}>
+                                                        {getViolationIcon(v.violationType || v.type)} {getViolationDisplayName(v.violationType || v.type)}
+                                                      </strong>
                                                       <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
                                                         ({v.riskLevel || 'LOW'} Risk)
                                                       </span>
@@ -894,7 +900,9 @@ export default function ProctorDashboard({ token, user, onLogout }) {
                           <span className={`badge ${v.severity === 'HIGH' || v.severity === 'CRITICAL' ? 'badge-danger' : v.severity === 'MEDIUM' ? 'badge-warning' : 'badge-info'}`} style={{ marginRight: '0.5rem' }}>
                             {v.severity}
                           </span>
-                          <strong>{v.violationType || v.type}</strong>
+                          <strong>
+                            {getViolationIcon(v.violationType || v.type)} {getViolationDisplayName(v.violationType || v.type)}
+                          </strong>
                           <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginLeft: '0.5rem' }}>
                             ({v.riskLevel || 'LOW'} Risk)
                           </span>
@@ -1074,7 +1082,12 @@ export default function ProctorDashboard({ token, user, onLogout }) {
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem', fontSize: '0.8rem', background: 'var(--bg-panel)', padding: '0.85rem', borderRadius: '8px', border: '1px solid var(--border)', marginBottom: '1rem' }}>
               <div>
                 <div style={{ color: 'var(--text-muted)' }}>Violation Type:</div>
-                <strong style={{ color: 'var(--text-primary)' }}>{evidenceViewerModal.violationType || evidenceViewerModal.type}</strong>
+                <strong style={{ color: 'var(--text-primary)' }}>
+                  {getViolationIcon(evidenceViewerModal.violationType || evidenceViewerModal.type)} {getViolationDisplayName(evidenceViewerModal.violationType || evidenceViewerModal.type)}
+                </strong>
+                <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)', marginTop: '2px' }}>
+                  Code: <code>{evidenceViewerModal.violationType || evidenceViewerModal.type}</code>
+                </div>
               </div>
               <div>
                 <div style={{ color: 'var(--text-muted)' }}>Server Timestamp:</div>

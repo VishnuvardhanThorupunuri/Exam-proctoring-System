@@ -4,6 +4,7 @@ import { io } from 'socket.io-client';
 import * as faceapi from '@vladmandic/face-api';
 import * as cocoSsd from '@tensorflow-models/coco-ssd';
 import { API_BASE_URL } from '../config';
+import { getViolationDisplayName } from '../utils/violationUtils';
 import './ExamSession.css';
 
 export default function ExamSession({ token, user }) {
@@ -109,12 +110,16 @@ export default function ExamSession({ token, user }) {
 
     // Capture compressed webcam frame evidence for confirmed violation
     const snapshotData = captureWebcamSnapshot();
+    const violationName = getViolationDisplayName(type);
 
     const payload = {
       attemptId,
       examId: exam._id || exam.id,
       studentId: user?.id || user?._id,
       type,
+      violationType: type,
+      violationName,
+      displayName: violationName,
       severity,
       confidence,
       timestamp: new Date().toISOString(),
@@ -137,17 +142,21 @@ export default function ExamSession({ token, user }) {
       body: JSON.stringify(payload),
     }).catch(err => console.warn('HTTP violation sync fallback error:', err));
 
-    // Trigger candidate UI warnings
-    if (type === 'NO_FACE') showStudentWarning('⚠️ Face not detected — Please face your camera', 'danger');
-    else if (type === 'MULTIPLE_FACES') showStudentWarning(`🚨 Multiple faces detected (${metadata.numberOfFaces || 2})`, 'danger');
-    else if (type === 'PHONE_DETECTED') showStudentWarning('🚨 Mobile phone detected — Prohibited item!', 'danger');
-    else if (type === 'BOOK_DETECTED') showStudentWarning('⚠️ Book/Notes detected in view', 'warning');
-    else if (type === 'TABLET_DETECTED') showStudentWarning('⚠️ Tablet detected in view', 'danger');
-    else if (type === 'TAB_SWITCH') showStudentWarning('⚠️ Tab switch detected! Stay on the exam page', 'danger');
-    else if (type === 'FULLSCREEN_EXIT') showStudentWarning('⚠️ Fullscreen mode exited — Please re-enable fullscreen', 'warning');
-    else if (type === 'CAMERA_DISCONNECTED') showStudentWarning('📷 Camera disconnected or obstructed!', 'danger');
-    else if (type === 'MICROPHONE_DISCONNECTED') showStudentWarning('🎙️ Microphone disconnected!', 'warning');
-    else if (type === 'NETWORK_DISCONNECTED') showStudentWarning('📡 Network connection lost — reconnecting...', 'danger');
+    // Trigger candidate UI warnings with friendly violation names
+    const warningText = {
+      NO_FACE: '⚠️ Face not detected — Please face your camera',
+      MULTIPLE_FACES: `🚨 Multiple faces detected (${metadata.numberOfFaces || 2})`,
+      PHONE_DETECTED: '🚨 Mobile phone detected — Prohibited item!',
+      BOOK_DETECTED: '⚠️ Book / Study material detected in view',
+      TABLET_DETECTED: '🚨 Tablet / Secondary device detected in view',
+      TAB_SWITCH: '⚠️ Tab switch detected! Stay on the exam page',
+      FULLSCREEN_EXIT: '⚠️ Fullscreen mode exited — Please re-enable fullscreen',
+      CAMERA_DISCONNECTED: '📷 Camera disconnected or obstructed!',
+      MICROPHONE_DISCONNECTED: '🎙️ Microphone disconnected!',
+      NETWORK_DISCONNECTED: '📡 Network connection lost — reconnecting...',
+    }[type] || `⚠️ ${violationName} detected`;
+
+    showStudentWarning(warningText, severity === 'LOW' ? 'warning' : 'danger');
 
     if (severity === 'HIGH' || severity === 'MEDIUM' || severity === 'CRITICAL') {
       setWarningsCount(prev => prev + 1);
@@ -482,14 +491,13 @@ export default function ExamSession({ token, user }) {
         setFaceStatusText('Checking Face Presence...');
         noFaceFrameCountRef.current += 1;
 
-        if (noFaceFrameCountRef.current < 10) {
-          // Sustained absence requirement: require ~5 seconds (10 consecutive frames @ 500ms)
-          // Prevents false positive NO_FACE warnings from brief glances, typing, or quick frame drops
-          setMonitoringStatusText('FACE_CHECKING');
+        if (noFaceFrameCountRef.current < 6) {
+          // Sustained absence: require ~3 seconds (6 consecutive frames @ 500ms)
+          setMonitoringStatusText('Verifying Face Presence...');
         } else {
-          // Sustained absence >= 10 consecutive frames (~5 seconds continuous) -> Confirmed NO_FACE
-          setMonitoringStatusText('NO_FACE Violation');
-          reportViolation('NO_FACE', 'MEDIUM', 0.90, { durationSec: 5, state: 'NO_FACE' });
+          // Sustained absence >= 6 consecutive frames (~3 seconds continuous) -> Confirmed NO_FACE
+          setMonitoringStatusText('⚠️ Face Not Detected');
+          reportViolation('NO_FACE', 'MEDIUM', 0.90, { durationSec: 3, state: 'NO_FACE' });
           noFaceFrameCountRef.current = 0;
         }
       } else if (faceCount >= 2) {
@@ -498,9 +506,9 @@ export default function ExamSession({ token, user }) {
         setMonitoringStatusText('Checking Multiple Faces...');
         multiFaceFrameCountRef.current += 1;
 
-        if (multiFaceFrameCountRef.current >= 4) {
-          // Require 4 consecutive frames (~2.0 seconds) to confirm multiple faces
-          setMonitoringStatusText('MULTIPLE_FACES Violation');
+        if (multiFaceFrameCountRef.current >= 3) {
+          // Require 3 consecutive frames (~1.5 seconds) to confirm multiple faces
+          setMonitoringStatusText('🚨 Multiple Faces Detected');
           reportViolation('MULTIPLE_FACES', 'HIGH', 0.95, { numberOfFaces: faceCount, state: 'MULTIPLE_FACES' });
           multiFaceFrameCountRef.current = 0;
         }
@@ -512,26 +520,29 @@ export default function ExamSession({ token, user }) {
 
         predictions.forEach(p => {
           const score = Math.round((p.score || 0) * 100) / 100;
-          if (score < 0.60) return; // High confidence threshold (>= 60%) to prevent false object alarms
+          if (score < 0.50) return; // Responsive confidence threshold (>= 50%)
 
           const detectedClass = (p.class || '').toLowerCase().trim();
 
-          // DO NOT classify the candidate's exam laptop as a cheating violation!
-          if (detectedClass === 'cell phone' || detectedClass === 'mobile phone') {
+          // Prohibited items detection
+          if (detectedClass === 'cell phone' || detectedClass === 'mobile phone' || detectedClass === 'phone') {
             phoneFrameCountRef.current += 1;
-            if (phoneFrameCountRef.current >= 3) {
-              reportViolation('PHONE_DETECTED', 'HIGH', score, { detectedObject: 'Cell phone', confidence: score });
+            if (phoneFrameCountRef.current >= 2) {
+              setMonitoringStatusText('🚨 Mobile Phone Detected');
+              reportViolation('PHONE_DETECTED', 'HIGH', score, { detectedObject: 'Mobile phone', confidence: score });
               phoneFrameCountRef.current = 0;
             }
           } else if (detectedClass === 'book') {
             bookFrameCountRef.current += 1;
-            if (bookFrameCountRef.current >= 3) {
+            if (bookFrameCountRef.current >= 2) {
+              setMonitoringStatusText('⚠️ Book / Notes Detected');
               reportViolation('BOOK_DETECTED', 'MEDIUM', score, { detectedObject: 'Book', confidence: score });
               bookFrameCountRef.current = 0;
             }
-          } else if (detectedClass === 'tablet') {
+          } else if (detectedClass === 'tablet' || detectedClass === 'ipad') {
             tabletFrameCountRef.current += 1;
-            if (tabletFrameCountRef.current >= 3) {
+            if (tabletFrameCountRef.current >= 2) {
+              setMonitoringStatusText('🚨 Tablet Detected');
               reportViolation('TABLET_DETECTED', 'HIGH', score, { detectedObject: 'Tablet', confidence: score });
               tabletFrameCountRef.current = 0;
             }
@@ -552,6 +563,7 @@ export default function ExamSession({ token, user }) {
         if (!isTabHiddenRef.current) {
           isTabHiddenRef.current = true;
           tabSwitchCountRef.current += 1;
+          setMonitoringStatusText('⚠️ Tab Switch Detected');
           reportViolation('TAB_SWITCH', 'MEDIUM', 1.0, { count: tabSwitchCountRef.current });
         }
       } else {
@@ -565,6 +577,7 @@ export default function ExamSession({ token, user }) {
       if (!isFull) {
         if (!isFullscreenExitRef.current) {
           isFullscreenExitRef.current = true;
+          setMonitoringStatusText('⚠️ Fullscreen Exited');
           reportViolation('FULLSCREEN_EXIT', 'MEDIUM', 1.0);
         }
       } else {
@@ -1002,7 +1015,7 @@ export default function ExamSession({ token, user }) {
               </div>
               <div style={{ display: 'flex', justifyContent: 'space-between' }}>
                 <span className="text-muted">Monitoring:</span>
-                <span style={{ fontWeight: 600, color: monitoringStatusText.includes('Violation') ? 'var(--danger)' : 'var(--primary)' }}>
+                <span style={{ fontWeight: 600, color: monitoringStatusText.includes('⚠️') || monitoringStatusText.includes('🚨') || monitoringStatusText.includes('Detected') ? 'var(--danger)' : 'var(--primary)' }}>
                   {monitoringStatusText}
                 </span>
               </div>

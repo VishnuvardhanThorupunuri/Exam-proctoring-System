@@ -3,6 +3,7 @@ const ExamAttempt = require('../models/ExamAttempt');
 const ProctorViolation = require('../models/ProctorViolation');
 const Exam = require('../models/Exam');
 const User = require('../models/User');
+const { normalizeViolationType, getViolationDisplayName } = require('../config/violationConfig');
 
 // Attempts: Fetch Specific Attempt
 const getAttemptById = async (req, res) => {
@@ -157,6 +158,8 @@ const getAttemptViolations = async (req, res) => {
     const formatted = violations.map(v => {
       const obj = v.toObject();
       obj.id = obj._id;
+      obj.violationName = getViolationDisplayName(obj.violationType);
+      obj.displayName = getViolationDisplayName(obj.violationType);
       return obj;
     });
 
@@ -289,7 +292,7 @@ const getAdminViolations = async (req, res) => {
     if (studentId) query.studentId = studentId;
     if (examId) query.examId = examId;
     if (attemptId) query.attemptId = attemptId;
-    if (violationType) query.violationType = violationType;
+    if (violationType) query.violationType = normalizeViolationType(violationType);
     if (severity) query.severity = severity.toUpperCase();
     if (riskLevel) query.riskLevel = riskLevel.toUpperCase();
 
@@ -346,6 +349,8 @@ const getAdminViolations = async (req, res) => {
       return {
         ...v,
         id: v._id,
+        violationName: getViolationDisplayName(v.violationType),
+        displayName: getViolationDisplayName(v.violationType),
         studentEmail: user.email || 'Unknown',
         examTitle: exam.title || 'Unknown Exam',
         deviceSessionId: v.deviceSessionId || attempt.deviceSessionId || 'N/A',
@@ -385,6 +390,8 @@ const getStudentViolations = async (req, res) => {
     const formatted = violations.map((v) => ({
       ...v,
       id: v._id,
+      violationName: getViolationDisplayName(v.violationType),
+      displayName: getViolationDisplayName(v.violationType),
     }));
 
     res.json(formatted);

@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { API_BASE_URL as API } from '../config';
+import { getViolationDisplayName, getViolationIcon } from '../utils/violationUtils';
 import './AdminDashboard.css';
 
 function StatCard({ icon, label, value, gradient, delay }) {
@@ -641,7 +642,9 @@ export default function AdminDashboard({ token, user, onLogout }) {
                                                         <span className={`badge ${v.severity === 'HIGH' || v.severity === 'CRITICAL' ? 'badge-danger' : 'badge-warning'}`} style={{ fontSize: '0.7rem' }}>
                                                           {v.severity}
                                                         </span>
-                                                        <strong style={{ fontSize: '0.85rem' }}>{v.violationType || v.type}</strong>
+                                                        <strong style={{ fontSize: '0.85rem' }}>
+                                                          {getViolationIcon(v.violationType || v.type)} {getViolationDisplayName(v.violationType || v.type)}
+                                                        </strong>
                                                         <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
                                                           ({v.riskLevel || 'LOW'} Risk)
                                                         </span>
@@ -741,14 +744,16 @@ export default function AdminDashboard({ token, user, onLogout }) {
                     style={{ fontSize: '0.85rem', padding: '0.4rem 0.75rem' }}
                   >
                     <option value="">All Violation Types</option>
-                    <option value="NO_FACE">NO_FACE</option>
-                    <option value="MULTIPLE_FACES">MULTIPLE_FACES</option>
-                    <option value="MOBILE_PHONE">MOBILE_PHONE</option>
-                    <option value="BOOK_DETECTED">BOOK_DETECTED</option>
-                    <option value="TABLET_DETECTED">TABLET_DETECTED</option>
-                    <option value="BROWSER_TAB_SWITCH">BROWSER_TAB_SWITCH</option>
-                    <option value="FULLSCREEN_EXIT">FULLSCREEN_EXIT</option>
-                    <option value="VOICE_DETECTED">VOICE_DETECTED</option>
+                    <option value="NO_FACE">👤 Face Not Detected</option>
+                    <option value="MULTIPLE_FACES">👥 Multiple Faces Detected</option>
+                    <option value="PHONE_DETECTED">📱 Mobile Phone Detected</option>
+                    <option value="BOOK_DETECTED">📖 Book / Notes Detected</option>
+                    <option value="TABLET_DETECTED">📲 Tablet / Secondary Device</option>
+                    <option value="TAB_SWITCH">📑 Tab Switch / Minimized</option>
+                    <option value="FULLSCREEN_EXIT">⛶ Fullscreen Mode Exited</option>
+                    <option value="CAMERA_DISCONNECTED">📷 Camera Disconnected</option>
+                    <option value="MICROPHONE_DISCONNECTED">🎙️ Microphone Disconnected</option>
+                    <option value="NETWORK_DISCONNECTED">📡 Network Disconnected</option>
                   </select>
                 </div>
                 <div>
@@ -825,7 +830,14 @@ export default function AdminDashboard({ token, user, onLogout }) {
                             </td>
                             <td style={{ fontSize: '0.85rem' }}>{v.examTitle}</td>
                             <td>
-                              <span style={{ fontWeight: 600, color: 'var(--text-primary)' }}>{v.violationType}</span>
+                              <div>
+                                <span style={{ fontWeight: 600, color: 'var(--text-primary)' }}>
+                                  {getViolationIcon(v.violationType || v.type)} {getViolationDisplayName(v.violationType || v.type)}
+                                </span>
+                                <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>
+                                  <code>{v.violationType || v.type}</code>
+                                </div>
+                              </div>
                               {v.metadata?.durationSeconds > 0 && (
                                 <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>
                                   Duration: {v.metadata.durationSeconds}s
@@ -952,7 +964,13 @@ export default function AdminDashboard({ token, user, onLogout }) {
             <div style={{ background: 'rgba(99, 102, 241, 0.05)', padding: '0.85rem', borderRadius: '8px', border: '1px solid rgba(99, 102, 241, 0.2)', marginBottom: '1rem' }}>
               <div style={{ fontSize: '0.75rem', color: '#6366f1', fontWeight: 600, textTransform: 'uppercase', marginBottom: '6px' }}>Risk Progression Detail</div>
               <div style={{ fontSize: '0.8rem', display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                <div><strong>Violation Type:</strong> {selectedSessionDrawer.violationType}</div>
+                <div>
+                  <strong>Violation Type:</strong>{' '}
+                  <span>
+                    {getViolationIcon(selectedSessionDrawer.violationType)} {getViolationDisplayName(selectedSessionDrawer.violationType)}{' '}
+                    <code style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>({selectedSessionDrawer.violationType})</code>
+                  </span>
+                </div>
                 <div><strong>Severity:</strong> {selectedSessionDrawer.severity} | <strong>Risk Level:</strong> {selectedSessionDrawer.riskLevel}</div>
                 <div><strong>Previous Score:</strong> {selectedSessionDrawer.previousRiskScore ?? 'N/A'}</div>
                 <div><strong>Risk Contribution (Deduction):</strong> -{selectedSessionDrawer.riskContribution ?? 'N/A'}</div>
@@ -1005,7 +1023,12 @@ export default function AdminDashboard({ token, user, onLogout }) {
               </div>
               <div>
                 <div style={{ color: 'var(--text-muted)' }}>Violation Type:</div>
-                <strong style={{ color: '#6366f1' }}>{evidenceViewerModal.violationType}</strong>
+                <strong style={{ color: '#6366f1' }}>
+                  {getViolationIcon(evidenceViewerModal.violationType)} {getViolationDisplayName(evidenceViewerModal.violationType)}
+                </strong>
+                <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)', marginTop: '2px' }}>
+                  Code: <code>{evidenceViewerModal.violationType}</code>
+                </div>
               </div>
               <div>
                 <div style={{ color: 'var(--text-muted)' }}>Server Timestamp:</div>
